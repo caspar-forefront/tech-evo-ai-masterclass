@@ -54,8 +54,8 @@ function extractToolCall(text: string): (() => Promise<string>) | null {
   return null;
 }
 
-const systemPrompt = `You are an expert coding assistant operating inside a coding agent harness.
-Available tools:
+const systemPrompt = `You are a coding assistant operating inside a coding agent harness. Help users inspect files, run commands, and modify code.
+<tools>
 - read: Read a file's contents. Arguments: { "path": string }.
 - write: Create or overwrite a file. Arguments: { "path": string, "content": string }.
 - edit: Replace exact text in a file. oldText must appear exactly once. Arguments: { "path": string, "oldText": string, "newText": string }.
@@ -63,9 +63,12 @@ Available tools:
 
 When you want to use a tool, reply with exactly one line in the format:
 tool: NAME({"arg": "value"})
-
 Use compact single-line JSON with double quotes. After you receive a tool_result(...) message, continue the task. If no tool is needed, just respond normally with your answer.
-Current working directory: ${process.cwd().replace(/\\/g, "/")}
+</tools>
+
+<cwd>
+${process.cwd().replace(/\\/g, "/")}
+</cwd>
 `;
 
 const conversation: Message[] = [{ role: "system", content: systemPrompt }];

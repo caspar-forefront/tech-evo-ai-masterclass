@@ -1,0 +1,1186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inside a coding agent</title>
+<!--
+  Lab 1 presentation for the Tech Evolution AI Masterclass. One self-contained file.
+
+  Keys: ← → or space to navigate · B breakout slide · A assignment slide · F fullscreen · Home / End.
+  A URL hash opens a slide: #12 is slide 12, #breakout and #assignment are the two lab slides.
+  PDF: open this file with ?print at the end of the URL, then print to PDF (1280 × 720, no margins).
+
+  The code on the slides comes from coding-harness/src/loop.ts. If loop.ts changes, update the
+  code slides (sendMessages, the tools, extractToolCall, runLoop) and the full source slide.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root {
+    /* Forefront identity: Manrope, and the gradient orange → pink → cyan (never reversed).
+       The three gradient stops are also the role colours on the slides. */
+    --bg: #101118;
+    --panel: #191A24;
+    --panel2: #14151D;
+    --line: #2E3040;
+    --text: #F1ECE4;
+    --muted: #9C9AA6;
+    --orange: #FF6B0B;  /* accent · the loop · assistant messages */
+    --pink: #FFB7F8;    /* the system prompt */
+    --cyan: #79F2FB;    /* user messages · the provider */
+    --green: #8FD3A0;   /* tools and tool results. A functional colour, not in the brand palette. */
+    --gradient: linear-gradient(90deg, #FF6B0B 0%, #FFB7F8 50%, #79F2FB 100%);
+    --sans: "Manrope", Arial, sans-serif;
+    --mono: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+    color-scheme: dark;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    overflow: hidden;
+  }
+
+  #stage-wrap {
+    position: fixed; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #stage {
+    width: 1280px; height: 720px;
+    position: relative; flex: none;
+    transform-origin: center center;
+  }
+
+  .slide {
+    position: absolute; inset: 0;
+    padding: 64px 80px 72px;
+    display: none;
+    flex-direction: column;
+  }
+  .slide.active { display: flex; }
+
+  /* ---------- shared slide furniture ---------- */
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 13px; letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 14px;
+  }
+  h2 {
+    font-size: 42px; font-weight: 800; letter-spacing: -0.025em;
+    line-height: 1.08; text-wrap: balance;
+    margin-bottom: 26px;
+  }
+  h2 .h2aside { font-size: 19px; font-weight: 400; color: var(--muted); letter-spacing: 0; margin-left: 10px; }
+  .lede { font-size: 19px; color: var(--muted); line-height: 1.45; margin: -12px 0 18px; max-width: 86ch; }
+  .lede b { color: var(--text); font-weight: 600; }
+  .punch {
+    margin-top: auto;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
+    font-size: 20px; font-weight: 600; color: var(--text);
+    letter-spacing: -0.01em; line-height: 1.3;
+  }
+  .punch .aside { color: var(--muted); font-weight: 400; font-size: 16px; letter-spacing: 0; }
+  .punch a, .lede a { color: var(--orange); text-decoration: none; }
+  .mono { font-family: var(--mono); font-size: 0.86em; }
+  .gradrule { height: 6px; width: 420px; border-radius: 3px; background: var(--gradient); }
+
+  /* ---------- code / transcript ---------- */
+  .code {
+    font-family: var(--mono);
+    background: var(--panel2);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 18px 22px;
+    font-size: 15px; line-height: 1.62;
+    overflow: hidden;
+    white-space: pre;
+  }
+  .code .c-key { color: var(--cyan); }
+  .code .c-str { color: var(--green); }
+  .code .c-kw  { color: var(--pink); }
+  .code .c-fn  { color: var(--orange); }
+  .code .c-cm  { color: var(--muted); }
+  .code .hl    { background: rgba(255,107,11,0.2); border-radius: 3px; padding: 0 2px; }
+  .code .ln    { display: block; margin: 0 -10px; padding: 0 10px; border-radius: 4px; }
+  .code .ln.hlon { background: rgba(255,107,11,0.2); }
+  @media (prefers-reduced-motion: no-preference) {
+    .code .ln { transition: background .25s ease; }
+  }
+  .code.wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .code.src {
+    column-count: 3; column-gap: 26px; column-rule: 1px solid var(--line);
+    white-space: pre-wrap; overflow-wrap: anywhere;
+    font-size: 10px; line-height: 1.3; padding: 12px 16px; flex: 1; min-height: 0;
+  }
+
+  /* ---------- layout helpers ---------- */
+  .cols { display: flex; gap: 32px; align-items: stretch; min-height: 0; flex: 1; }
+  .col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+  .collabel { font-family: var(--mono); font-size: 13px; color: var(--muted); letter-spacing: .1em; text-transform: uppercase; }
+  ul.talk { list-style: none; display: flex; flex-direction: column; gap: 11px; font-size: 17.5px; line-height: 1.42; }
+  ul.talk li { padding-left: 24px; position: relative; }
+  ul.talk li::before {
+    content: ""; position: absolute; left: 2px; top: 11px;
+    width: 10px; height: 3px; background: var(--orange);
+  }
+  ul.talk b { font-weight: 700; }
+
+  /* ---------- fragments ---------- */
+  .frag { visibility: hidden; }
+  .frag.on { visibility: visible; }
+  @media (prefers-reduced-motion: no-preference) {
+    .frag { opacity: 0; transform: translateY(6px); transition: opacity .28s ease, transform .28s ease; }
+    .frag.on { opacity: 1; transform: none; }
+  }
+
+  /* ---------- chrome ---------- */
+  #progress {
+    position: fixed; left: 0; top: 0; height: 3px; width: 0;
+    background: var(--gradient) no-repeat; background-size: 100vw 100%;
+    transition: width .2s ease;
+    z-index: 5;
+  }
+  #hud {
+    position: fixed; right: 18px; bottom: 14px;
+    display: flex; align-items: center; gap: 14px;
+    font-family: var(--mono); font-size: 13px; color: var(--muted);
+    z-index: 5;
+  }
+  #hud button {
+    background: var(--panel); color: var(--text);
+    border: 1px solid var(--line); border-radius: 5px;
+    font-family: var(--mono); font-size: 14px;
+    width: 34px; height: 30px; cursor: pointer;
+  }
+  #hud button:hover { border-color: var(--orange); }
+  #hud button:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
+  #hint {
+    position: fixed; left: 18px; bottom: 14px;
+    font-family: var(--mono); font-size: 12px; color: var(--muted);
+    z-index: 5;
+  }
+  :fullscreen #hud, :fullscreen #hint { display: none; }
+
+  /* ---------- title ---------- */
+  .s-title { justify-content: center; }
+  .s-title .loopmark { font-family: var(--mono); font-size: 15px; color: var(--muted); margin-bottom: 34px; }
+  .s-title h1 { font-size: 92px; font-weight: 800; letter-spacing: -0.04em; line-height: 0.98; }
+  .s-title h1 .wt { display: block; font-family: var(--mono); font-size: 40px; font-weight: 600; color: var(--muted); letter-spacing: 0; margin-bottom: 14px; }
+  .s-title .gradrule { margin-top: 30px; }
+  .s-title .subtitle { margin-top: 26px; font-size: 28px; font-weight: 600; letter-spacing: -0.015em; line-height: 1.25; max-width: 36ch; color: var(--text); }
+  .s-title .byline { margin-top: 40px; font-size: 20px; display: flex; gap: 22px; align-items: baseline; flex-wrap: wrap; }
+  .s-title .byline .mono { font-family: var(--mono); font-size: 15px; color: var(--muted); }
+
+  /* ---------- goal + agenda blocks ---------- */
+  .agenda { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; flex: 1; align-content: center; }
+  .agenda.four { grid-template-columns: repeat(4, 1fr); gap: 14px; }
+  .ablock { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 24px 24px 22px; display: flex; flex-direction: column; gap: 10px; }
+  .ablock .amin { font-family: var(--mono); font-size: 14px; color: var(--orange); }
+  .ablock .attl { font-size: 26px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.14; }
+  .ablock .adesc { font-size: 16.5px; color: var(--muted); line-height: 1.45; }
+  .agenda.four .ablock { padding: 20px 20px 20px; }
+  .agenda.four .attl { font-size: 23px; }
+  .agenda.four .adesc { font-size: 15.5px; }
+  .tbar { margin-top: 22px; }
+  .ttrack { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--gradient); }
+  .ttrack span { display: block; height: 100%; border-right: 3px solid var(--bg); }
+  .ttrack span:last-child { border-right: 0; }
+  .tlabels { display: flex; position: relative; margin-top: 8px; font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
+  .tlabels .tend { position: absolute; right: 0; top: 0; }
+
+  /* ---------- logo collage ---------- */
+  .collage { position: relative; flex: 1; }
+  .sticker {
+    position: absolute; border-radius: 12px; padding: 26px 30px;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
+  }
+  .sticker img { width: 100%; height: auto; display: block; }
+  .sticker.light { background: #F3EFE6; }
+  .sticker.dark { background: var(--panel); border: 1px solid var(--line); }
+  .sticker .cap { position: absolute; bottom: 7px; right: 14px; font-family: var(--mono); font-size: 12px; color: #6E6A5E; }
+
+  /* ---------- claim ---------- */
+  .s-claim { justify-content: center; }
+  .s-claim blockquote { font-size: 54px; font-weight: 800; letter-spacing: -0.03em; line-height: 1.12; max-width: 24ch; text-wrap: balance; }
+  .s-claim .claimsub { margin-top: 22px; font-size: 24px; line-height: 1.4; max-width: 44ch; color: var(--muted); }
+  .s-claim .inpractice { margin-top: 34px; font-size: 30px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.25; }
+  .s-claim .inpractice span { color: var(--muted); font-weight: 600; }
+  .s-claim .promise { margin-top: 34px; font-size: 20px; color: var(--muted); line-height: 1.5; }
+  .s-claim .promise b { color: var(--text); font-weight: 700; }
+  .accent { color: var(--orange); }
+
+  /* ---------- history timeline ---------- */
+  .timeline { display: flex; gap: 14px; flex: 0 1 auto; align-items: stretch; }
+  .era { flex: 1; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 18px 16px 14px; display: flex; flex-direction: column; gap: 8px; }
+  .era .eyr { font-family: var(--mono); font-size: 14px; color: var(--muted); }
+  .era .ettl { font-weight: 800; font-size: 19px; letter-spacing: -0.01em; }
+  .era .edesc { font-size: 14px; color: var(--muted); line-height: 1.45; }
+  .era .ecap { margin-top: auto; padding-top: 10px; border-top: 1px solid var(--line); font-family: var(--mono); font-size: 11.5px; color: var(--muted); line-height: 1.4; }
+  .era.now { border-color: var(--orange); }
+  .era.now .eyr, .era.now .ecap { color: var(--orange); }
+  .era.frag { visibility: visible; opacity: 0.22; transform: none; } /* stays in layout, dims until revealed */
+  .era.frag.on { opacity: 1; }
+
+  /* ---------- composition ---------- */
+  .compose { display: flex; flex-direction: column; gap: 14px; flex: 1; justify-content: center; }
+  .part { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--muted); border-radius: 8px; padding: 18px 28px; display: flex; align-items: baseline; gap: 26px; }
+  .part.p0 { border-left-color: var(--cyan); background: transparent; border-style: dashed; }
+  .part.p1 { border-left-color: var(--pink); }
+  .part.p2 { border-left-color: var(--green); }
+  .part.p3 { border-left-color: var(--orange); }
+  .part .pnum { font-family: var(--mono); font-size: 15px; color: var(--muted); width: 24px; }
+  .part .pname { font-size: 29px; font-weight: 800; letter-spacing: -0.02em; width: 280px; flex: none; }
+  .part .pdesc { font-size: 17.5px; color: var(--muted); line-height: 1.4; flex: 1; }
+  .part .pdesc b { color: var(--text); font-weight: 600; }
+
+  /* ---------- system prompt anatomy ---------- */
+  .anat { display: flex; flex-direction: column; gap: 8px; }
+  .anat-row { display: flex; gap: 12px; align-items: stretch; }
+  .anat-label { width: 132px; flex-shrink: 0; font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.08em; text-transform: uppercase; display: flex; align-items: center; justify-content: flex-end; text-align: right; }
+  .anat-body { flex: 1; min-width: 0; font-family: var(--mono); font-size: 11.5px; line-height: 1.45; background: var(--panel2); border: 1px solid var(--line); border-left-width: 4px; border-radius: 5px; padding: 7px 13px; white-space: pre-wrap; }
+  .prodstack { display: flex; flex-direction: column; gap: 10px; }
+  .prodcard { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--muted); border-radius: 6px; padding: 13px 18px; }
+  .prodcard .ph1 { font-weight: 800; font-size: 17px; }
+  .prodcard .ph1 small { font-family: var(--mono); font-size: 12px; color: var(--muted); font-weight: 400; margin-left: 10px; }
+  .prodcard .pitems { font-size: 14px; color: var(--muted); line-height: 1.5; margin-top: 4px; }
+  .sidenote { font-size: 14.5px; color: var(--muted); line-height: 1.45; margin-top: auto; padding-top: 10px; border-top: 1px solid var(--line); }
+
+  /* ---------- prompt size chart ---------- */
+  .chart { display: flex; flex-direction: column; gap: 17px; flex: 1; justify-content: center; }
+  .crow { display: flex; align-items: center; gap: 18px; }
+  .crow .cname { width: 236px; flex-shrink: 0; font-weight: 700; font-size: 18px; text-align: right; line-height: 1.2; }
+  .crow .cname small { display: block; font-family: var(--mono); font-size: 12px; color: var(--muted); font-weight: 400; margin-top: 2px; }
+  .crow .ctrack { flex: 1; height: 26px; position: relative; }
+  .crow .cbar { position: absolute; left: 0; top: 0; height: 100%; background: var(--orange); border-radius: 0 4px 4px 0; min-width: 3px; }
+  .crow .cval { position: absolute; top: 50%; transform: translateY(-50%); font-family: var(--mono); font-size: 14px; color: var(--text); white-space: nowrap; padding-left: 10px; }
+  .crow .cval.in { color: var(--bg); font-weight: 600; }
+  .clegend { display: flex; gap: 20px; font-family: var(--mono); font-size: 12.5px; color: var(--muted); padding-left: 254px; margin-top: -8px; }
+  .clegend span { display: inline-flex; align-items: center; gap: 7px; }
+  .clegend i { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+
+  /* ---------- tools ---------- */
+  .toolgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .toolcard { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 11px 14px 12px; display: flex; flex-direction: column; gap: 7px; }
+  .toolcard .th { display: flex; gap: 14px; align-items: baseline; }
+  .toolcard .tn { font-family: var(--mono); font-size: 18px; font-weight: 600; color: var(--green); width: 58px; }
+  .toolcard .tr { font-size: 15.5px; color: var(--muted); }
+  .toolcard .code { font-size: 12px; line-height: 1.5; padding: 8px 11px; flex: 1; }
+
+  /* ---------- transcript messages ---------- */
+  .msg { font-family: var(--mono); font-size: 13px; line-height: 1.5; border: 1px solid var(--line); border-left-width: 4px; border-radius: 5px; background: var(--panel2); padding: 7px 13px; display: flex; gap: 12px; align-items: baseline; }
+  .msg .mrole { font-weight: 600; width: 96px; flex-shrink: 0; }
+  .msg .mtext { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); min-width: 0; }
+  .convo { display: flex; flex-direction: column; gap: 8px; }
+  .convo .msg { font-size: 12.5px; line-height: 1.4; padding: 5px 12px; }
+  .m-system { border-left-color: var(--pink); } .m-system .mrole { color: var(--pink); }
+  .m-user { border-left-color: var(--cyan); } .m-user .mrole { color: var(--cyan); }
+  .m-assistant { border-left-color: var(--orange); } .m-assistant .mrole { color: var(--orange); }
+  .m-tool { border-left-color: var(--green); } .m-tool .mrole { color: var(--green); }
+  .exitbadge { font-family: var(--mono); font-size: 12.5px; line-height: 1.45; color: var(--green); border: 1px solid rgba(143,211,160,.4); background: rgba(143,211,160,.1); border-radius: 4px; padding: 6px 10px; align-self: flex-start; }
+  .capnote { font-family: var(--mono); font-size: 12px; color: var(--muted); line-height: 1.5; }
+  .stepno { color: var(--orange); margin-right: 6px; }
+
+  /* ---------- context growth ---------- */
+  .growth { display: flex; gap: 26px; align-items: flex-end; flex: 1; min-height: 0; padding-bottom: 4px; }
+  .turncol { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; gap: 5px; }
+  .turncol .tlabel { font-family: var(--mono); font-size: 12.5px; color: var(--muted); text-align: center; margin-top: 8px; }
+  .blk { height: 24px; border-radius: 4px; border: 1px solid var(--line); font-family: var(--mono); font-size: 11px; display: flex; align-items: center; padding: 0 10px; overflow: hidden; white-space: nowrap; }
+  .b-sys { background: rgba(255,183,248,.14); color: var(--pink); border-color: rgba(255,183,248,.38); height: 34px; }
+  .b-usr { background: rgba(121,242,251,.11); color: var(--cyan); border-color: rgba(121,242,251,.36); }
+  .b-ast { background: rgba(255,107,11,.15); color: var(--orange); border-color: rgba(255,107,11,.45); }
+  .b-res { background: rgba(143,211,160,.12); color: var(--green); border-color: rgba(143,211,160,.38); }
+  .conseq { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 16px; }
+  .conseq div { font-size: 15px; color: var(--muted); line-height: 1.42; border-top: 2px solid var(--line); padding-top: 9px; }
+  .conseq b { display: block; color: var(--text); font-weight: 700; font-size: 16.5px; margin-bottom: 3px; }
+
+  /* ---------- plumbing: one row for each part of the harness ---------- */
+  .plumb { display: flex; flex-direction: column; gap: 12px; flex: 1; justify-content: center; }
+  .prow { display: flex; gap: 18px; align-items: flex-start; }
+  .prow .plabel { width: 132px; flex: none; font-family: var(--mono); font-size: 12.5px; letter-spacing: .08em; text-transform: uppercase; text-align: right; padding-top: 9px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px 9px; flex: 1; }
+  .chip { font-family: var(--mono); font-size: 14.5px; line-height: 1.2; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 7px 15px; color: var(--muted); display: inline-flex; align-items: center; gap: 9px; white-space: nowrap; }
+  .chip.lab { color: var(--text); }
+  .chip .tag { font-size: 11px; letter-spacing: .04em; border-radius: 999px; padding: 2px 8px; color: var(--bg); font-weight: 600; }
+  .k-prompt .plabel { color: var(--pink); }   .k-prompt .chip.lab { border-color: rgba(255,183,248,.5); } .k-prompt .tag { background: var(--pink); }
+  .k-tools .plabel { color: var(--green); }   .k-tools .chip.lab { border-color: rgba(143,211,160,.5); }  .k-tools .tag { background: var(--green); }
+  .k-loop .plabel { color: var(--orange); }   .k-loop .chip.lab { border-color: rgba(255,107,11,.6); }   .k-loop .tag { background: var(--orange); }
+  .k-prov .plabel { color: var(--cyan); }     .k-prov .chip.lab { border-color: rgba(121,242,251,.5); }  .k-prov .tag { background: var(--cyan); }
+
+  /* ---------- breakout + assignment ---------- */
+  .menu { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .menu a { display: flex; flex-direction: column; gap: 3px; text-decoration: none; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 11px 16px 12px; }
+  .menu a:hover, .menu a:focus-visible { border-color: var(--orange); outline: none; }
+  .menu .mn { font-family: var(--mono); font-size: 12px; color: var(--orange); letter-spacing: .08em; text-transform: uppercase; }
+  .menu .mt { font-size: 19px; font-weight: 800; letter-spacing: -0.015em; }
+  .menu .ms { font-size: 14px; color: var(--muted); line-height: 1.35; }
+  .menu a.bonus { border-style: dashed; }
+  .menu a.bonus .mn { color: var(--muted); }
+  .plan { display: flex; flex-direction: column; gap: 7px; margin-top: 14px; padding-top: 16px; border-top: 1px solid var(--line); }
+  .plan div { display: flex; gap: 14px; align-items: baseline; font-size: 15.5px; color: var(--muted); line-height: 1.35; }
+  .plan div span { font-family: var(--mono); font-size: 13px; color: var(--orange); width: 82px; flex: none; }
+  .compose.moves .part { border-left-color: var(--orange); }
+  .compose.moves .pnum { color: var(--orange); }
+  .compose.moves .pname { font-size: 24px; width: 440px; }
+  .parts { display: grid; grid-template-columns: 0.9fr 1.2fr 1fr; gap: 16px; flex: 1; align-content: start; }
+  .pblock { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 18px 20px 18px; display: flex; flex-direction: column; gap: 9px; }
+  .pblock.min { border-color: var(--orange); }
+  .pblock .amin { font-family: var(--mono); font-size: 13px; color: var(--orange); letter-spacing: .06em; text-transform: uppercase; }
+  .pblock .attl { font-size: 24px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.14; }
+  .pblock p { font-size: 15.5px; color: var(--muted); line-height: 1.42; }
+  .pblock p b { color: var(--text); font-weight: 700; }
+  .pblock .code { font-size: 11.5px; line-height: 1.45; padding: 8px 11px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .test { font-family: var(--mono); font-size: 12px; color: var(--green); border: 1px solid rgba(143,211,160,.4); background: rgba(143,211,160,.1); border-radius: 4px; padding: 3px 9px; align-self: flex-start; }
+  .feats { display: flex; flex-wrap: wrap; gap: 6px; }
+  .feats span { font-family: var(--mono); font-size: 12px; border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; color: var(--text); white-space: nowrap; }
+
+  /* ---------- closing ---------- */
+  .closing { display: flex; gap: 64px; margin-top: 34px; align-items: flex-start; }
+  .closing .links { display: flex; flex-direction: column; gap: 11px; font-size: 19px; }
+  .closing .links span { color: var(--muted); }
+  .closing .links .mail { margin-top: 16px; font-family: var(--mono); font-size: 16px; }
+  .qr { display: flex; flex-direction: column; align-items: center; gap: 12px; flex: none; color: inherit; text-decoration: none; }
+  .qrbox { width: 210px; height: 210px; padding: 14px; box-sizing: border-box; background: #fff; color: #000; border-radius: 8px; }
+  .qrbox svg { display: block; width: 100%; height: 100%; }
+  .qrurl { font-family: var(--mono); font-size: 14px; font-weight: 600; color: var(--text); text-align: center; line-height: 1.4; }
+
+  /* ---------- print: add ?print to the URL, then print to PDF ---------- */
+  @page { size: 1280px 720px; margin: 0; }
+  html.print, html.print body { height: auto; overflow: visible; }
+  html.print body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  html.print #stage-wrap { position: static; display: block; }
+  html.print #stage { transform: none; width: 1280px; height: auto; }
+  html.print .slide { display: flex; position: relative; inset: auto; width: 1280px; height: 720px; overflow: hidden; background: var(--bg); break-after: page; break-inside: avoid; }
+  html.print #progress, html.print #hud, html.print #hint { display: none; }
+</style>
+</head>
+<body>
+
+<div id="progress"></div>
+<div id="stage-wrap"><div id="stage">
+
+  <!-- ============ 1 · TITLE ============ -->
+  <section class="slide s-title">
+    <div class="loopmark">Tech Evolution AI Masterclass · Lab 1: The harness</div>
+    <h1><span class="wt">while (true) { … }</span>Inside a coding agent</h1>
+    <div class="gradrule"></div>
+    <div class="subtitle">Understand the building blocks of coding agents such as Claude Code, Codex, and Pi.</div>
+    <div class="byline">
+      <span style="font-weight:800">Caspar Nettelbladt</span>
+      <span class="mono">caspar.nettelbladt@forefront.se</span>
+      <span class="mono">Forefront</span>
+    </div>
+  </section>
+
+  <!-- ============ 2 · GOAL (README.md) ============ -->
+  <section class="slide">
+    <div class="eyebrow">Goal</div>
+    <h2>After the lab, you can do three things</h2>
+    <div class="agenda">
+      <div class="ablock">
+        <div class="amin">1</div>
+        <div class="attl">Trace what a coding agent does</div>
+        <div class="adesc">Follow a task from the first request through the replies of the model, the tool calls, and the next steps in the agent loop.</div>
+      </div>
+      <div class="ablock">
+        <div class="amin">2</div>
+        <div class="attl">Shape the context of the agent</div>
+        <div class="adesc">Explain what the model sees on each request: the system prompt, the instructions, the tool definitions, and the conversation history. Name the parts that you control.</div>
+      </div>
+      <div class="ablock">
+        <div class="amin">3</div>
+        <div class="attl">Learn with a coding agent</div>
+        <div class="adesc">Use a coding agent as a guide when you explore topics and codebases. Let it lead you to the sources, then build your own understanding from them.</div>
+      </div>
+    </div>
+    <div class="punch">With that knowledge you can evaluate agentic tools and adapt your workflows as software engineering changes.</div>
+  </section>
+
+  <!-- ============ 3 · AGENDA (README.md) ============ -->
+  <section class="slide">
+    <div class="eyebrow">The next two hours</div>
+    <h2>First how it works, then you explore and build</h2>
+    <div class="agenda four">
+      <div class="ablock">
+        <div class="amin">0:00 · 30 min</div>
+        <div class="attl">Presentation</div>
+        <div class="adesc">Inside a coding agent. See how a harness is built from a system prompt, tools, and a loop.</div>
+      </div>
+      <div class="ablock">
+        <div class="amin">0:30 · 30 min</div>
+        <div class="attl">Questions and discussion</div>
+        <div class="adesc">Ask about the presentation and about the agents that you use.</div>
+      </div>
+      <div class="ablock">
+        <div class="amin">1:00 · 45 min</div>
+        <div class="attl">Breakout session</div>
+        <div class="adesc">Explore one topic in a group with a coding agent, then present it.</div>
+      </div>
+      <div class="ablock">
+        <div class="amin">1:45 · 15 min</div>
+        <div class="attl">Lab assignment</div>
+        <div class="adesc">We go through the assignment together. If there is time, we start Part 1 together.</div>
+      </div>
+    </div>
+    <div class="tbar" aria-hidden="true">
+      <div class="ttrack"><span style="flex:30"></span><span style="flex:30"></span><span style="flex:45"></span><span style="flex:15"></span></div>
+      <div class="tlabels"><span style="flex:30">0:00</span><span style="flex:30">0:30</span><span style="flex:45">1:00</span><span style="flex:15">1:45</span><span class="tend">2:00</span></div>
+    </div>
+    <div class="punch" style="margin-top:22px">The parts build on each other. You get the model of a harness, your group explores one feature that the starter lacks, and then you add such features.</div>
+  </section>
+
+  <!-- ============ 4 · LOGO COLLAGE ============ -->
+  <section class="slide">
+    <div class="collage">
+      <div class="sticker light" style="left:3%;top:13%;width:330px;transform:rotate(-5deg);padding-bottom:34px"><img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiIHN0YW5kYWxvbmU9Im5vIj8+CjxzdmcKICAgaWQ9ImthdG1hbl8xIgogICBkYXRhLW5hbWU9ImthdG1hbiAxIgogICB2ZXJzaW9uPSIxLjEiCiAgIHZpZXdCb3g9IjAgMCA2ODkuOTc5OTcgMTQ4LjE3OTk5IgogICBzb2RpcG9kaTpkb2NuYW1lPSJDbGF1ZGVfQWkuc3ZnIgogICB3aWR0aD0iNjg5Ljk3OTk4IgogICBoZWlnaHQ9IjE0OC4xNzk5OSIKICAgaW5rc2NhcGU6dmVyc2lvbj0iMS4yLjIgKDczMmEwMWRhNjMsIDIwMjItMTItMDkpIgogICB4bWxuczppbmtzY2FwZT0iaHR0cDovL3d3dy5pbmtzY2FwZS5vcmcvbmFtZXNwYWNlcy9pbmtzY2FwZSIKICAgeG1sbnM6c29kaXBvZGk9Imh0dHA6Ly9zb2RpcG9kaS5zb3VyY2Vmb3JnZS5uZXQvRFREL3NvZGlwb2RpLTAuZHRkIgogICB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciCiAgIHhtbG5zOnN2Zz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPgogIDxzb2RpcG9kaTpuYW1lZHZpZXcKICAgICBpZD0ibmFtZWR2aWV3MTUyIgogICAgIHBhZ2Vjb2xvcj0iI2ZmZmZmZiIKICAgICBib3JkZXJjb2xvcj0iIzAwMDAwMCIKICAgICBib3JkZXJvcGFjaXR5PSIwLjI1IgogICAgIGlua3NjYXBlOnNob3dwYWdlc2hhZG93PSIyIgogICAgIGlua3NjYXBlOnBhZ2VvcGFjaXR5PSIwLjAiCiAgICAgaW5rc2NhcGU6cGFnZWNoZWNrZXJib2FyZD0iMCIKICAgICBpbmtzY2FwZTpkZXNrY29sb3I9IiNkMWQxZDEiCiAgICAgc2hvd2dyaWQ9ImZhbHNlIgogICAgIGlua3NjYXBlOnpvb209IjEuMzA4NjI3OSIKICAgICBpbmtzY2FwZTpjeD0iMzQ1LjM5OTk1IgogICAgIGlua3NjYXBlOmN5PSI3My43NDEzNjEiCiAgICAgaW5rc2NhcGU6d2luZG93LXdpZHRoPSIxOTIwIgogICAgIGlua3NjYXBlOndpbmRvdy1oZWlnaHQ9Ijk5MSIKICAgICBpbmtzY2FwZTp3aW5kb3cteD0iLTkiCiAgICAgaW5rc2NhcGU6d2luZG93LXk9Ii05IgogICAgIGlua3NjYXBlOndpbmRvdy1tYXhpbWl6ZWQ9IjEiCiAgICAgaW5rc2NhcGU6Y3VycmVudC1sYXllcj0ia2F0bWFuXzEiIC8+CiAgPGRlZnMKICAgICBpZD0iZGVmczE0NSI+CiAgICA8c3R5bGUKICAgICAgIGlkPSJzdHlsZTE0MyI+CiAgICAgIC5jbHMtMSB7CiAgICAgICAgZmlsbDogIzBmMGYwZDsKICAgICAgfQoKICAgICAgLmNscy0xLCAuY2xzLTIgewogICAgICAgIHN0cm9rZS13aWR0aDogMHB4OwogICAgICB9CgogICAgICAuY2xzLTIgewogICAgICAgIGZpbGw6ICNkOTc3NTc7CiAgICAgIH0KICAgIDwvc3R5bGU+CiAgPC9kZWZzPgogIDxnCiAgICAgaWQ9ImczMTQiCiAgICAgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoLTc1Ljk2LC0yMjMuNTMpIj4KICAgIDxwYXRoCiAgICAgICBjbGFzcz0iY2xzLTIiCiAgICAgICBkPSJtIDEwNS4wMSwzMjIuMDcgMjkuMTQsLTE2LjM1IDAuNDksLTEuNDIgLTAuNDksLTAuNzkgaCAtMS40MiBsIC00Ljg3LC0wLjMgLTE2LjY1LC0wLjQ1IC0xNC40NCwtMC42IC0xMy45OSwtMC43NSAtMy41MiwtMC43NSAtMy4zLC00LjM1IDAuMzQsLTIuMTcgMi45NiwtMS45OSA0LjI0LDAuMzcgOS4zNywwLjY0IDE0LjA2LDAuOTcgMTAuMiwwLjYgMTUuMTEsMS41NyBoIDIuNCBsIDAuMzQsLTAuOTcgLTAuODIsLTAuNiAtMC42NCwtMC42IC0xNC41NSwtOS44NiAtMTUuNzUsLTEwLjQyIC04LjI1LC02IC00LjQ2LC0zLjA0IC0yLjI1LC0yLjg1IC0wLjk3LC02LjIyIDQuMDUsLTQuNDYgNS40NCwwLjM3IDEuMzksMC4zNyA1LjUxLDQuMjQgMTEuNzcsOS4xMSAxNS4zNywxMS4zMiAyLjI1LDEuODcgMC45LC0wLjY0IDAuMTEsLTAuNDUgLTEuMDEsLTEuNjkgLTguMzYsLTE1LjExIC04LjkyLC0xNS4zNyAtMy45NywtNi4zNyAtMS4wNSwtMy44MiBjIC0wLjM3LC0xLjU3IC0wLjY0LC0yLjg5IC0wLjY0LC00LjUgbCA0LjYxLC02LjI2IDIuNTUsLTAuODIgNi4xNSwwLjgyIDIuNTksMi4yNSAzLjgyLDguNzQgNi4xOSwxMy43NiA5LjYsMTguNzEgMi44MSw1LjU1IDEuNSw1LjE0IDAuNTYsMS41NyBoIDAuOTcgdiAtMC45IGwgMC43OSwtMTAuNTQgMS40NiwtMTIuOTQgMS40MiwtMTYuNjUgMC40OSwtNC42OSAyLjMyLC01LjYyIDQuNjEsLTMuMDQgMy42LDEuNzIgMi45Niw0LjI0IC0wLjQxLDIuNzQgLTEuNzYsMTEuNDQgLTMuNDUsMTcuOTIgLTIuMjUsMTIgaCAxLjMxIGwgMS41LC0xLjUgNi4wNywtOC4wNiAxMC4yLC0xMi43NSA0LjUsLTUuMDYgNS4yNSwtNS41OSAzLjM3LC0yLjY2IGggNi4zNyBsIDQuNjksNi45NyAtMi4xLDcuMiAtNi41Niw4LjMyIC01LjQ0LDcuMDUgLTcuOCwxMC41IC00Ljg3LDguNCAwLjQ1LDAuNjcgMS4xNiwtMC4xMSAxNy42MiwtMy43NSA5LjUyLC0xLjcyIDExLjM2LC0xLjk1IDUuMTQsMi40IDAuNTYsMi40NCAtMi4wMiw0Ljk5IC0xMi4xNSwzIC0xNC4yNSwyLjg1IC0yMS4yMiw1LjAyIC0wLjI2LDAuMTkgMC4zLDAuMzcgOS41NiwwLjkgNC4wOSwwLjIyIGggMTAuMDEgbCAxOC42NCwxLjM5IDQuODcsMy4yMiAyLjkyLDMuOTQgLTAuNDksMyAtNy41LDMuODIgLTEwLjEyLC0yLjQgLTIzLjYyLC01LjYyIC04LjEsLTIuMDIgaCAtMS4xMiB2IDAuNjcgbCA2Ljc1LDYuNiAxMi4zNywxMS4xNyAxNS40OSwxNC40IDAuNzksMy41NiAtMS45OSwyLjgxIC0yLjEsLTAuMyAtMTMuNjEsLTEwLjI0IC01LjI1LC00LjYxIC0xMS44OSwtMTAuMDEgaCAtMC43OSB2IDEuMDUgbCAyLjc0LDQuMDEgMTQuNDcsMjEuNzUgMC43NSw2LjY3IC0xLjA1LDIuMTcgLTMuNzUsMS4zMSAtNC4xMiwtMC43NSAtOC40NywtMTEuODkgLTguNzQsLTEzLjM5IC03LjA1LC0xMiAtMC44NiwwLjQ5IC00LjE2LDQ0LjgxIC0xLjk1LDIuMjkgLTQuNSwxLjcyIC0zLjc1LC0yLjg1IC0xLjk5LC00LjYxIDEuOTksLTkuMTEgMi40LC0xMS44OSAxLjk1LC05LjQ1IDEuNzYsLTExLjc0IDEuMDUsLTMuOSAtMC4wNywtMC4yNiAtMC44NiwwLjExIC04Ljg1LDEyLjE1IC0xMy40NiwxOC4xOSAtMTAuNjUsMTEuNCAtMi41NSwxLjAxIC00LjQyLC0yLjI5IDAuNDEsLTQuMDkgMi40NywtMy42NCAxNC43NCwtMTguNzUgOC44OSwtMTEuNjIgNS43NCwtNi43MSAtMC4wNCwtMC45NyBoIC0wLjM0IGwgLTM5LjE1LDI1LjQyIC02Ljk3LDAuOSAtMywtMi44MSAwLjM3LC00LjYxIDEuNDIsLTEuNSAxMS43NywtOC4xIC0wLjA0LDAuMDQgeiIKICAgICAgIHNoYXBlLXJlbmRlcmluZz0ib3B0aW1pemVRdWFsaXR5IgogICAgICAgaWQ9InBhdGgxNDciIC8+CiAgICA8cGF0aAogICAgICAgY2xhc3M9ImNscy0xIgogICAgICAgZD0ibSAzMTcuNzMsMzQ5LjMzIGMgLTE4LjgyLDAgLTMxLjY5LC0xMC41IC0zNy43NiwtMjYuNjYgLTMuMTcsLTguNDIgLTQuNzQsLTE3LjM2IC00LjYxLC0yNi4zNiAwLC0yNy4xMSAxMi4xNSwtNDUuOTQgMzksLTQ1Ljk0IDE4LjA0LDAgMjkuMTcsNy44NyAzNS41MSwyNi42NiBoIDcuNzIgbCAtMS4wNSwtMjUuOTEgYyAtMTAuOCwtNi45NyAtMjQuMywtMTAuNSAtNDAuNzIsLTEwLjUgLTIzLjE0LDAgLTQyLjgyLDEwLjM1IC01My43NywyOS4wMiAtNS42Niw5Ljg2IC04LjUzLDIxLjA3IC04LjMyLDMyLjQ0IDAsMjAuNzQgOS43OSwzOS4xMSAyOC4xNiw0OS4zMSAxMC4wNiw1LjM3IDIxLjM0LDguMDQgMzIuNzQsNy43MiAxNy45MiwwIDMyLjE0LC0zLjQxIDQ0Ljc0LC05LjM3IGwgMy4yNiwtMjguNTcgaCAtNy44NyBjIC00LjcyLDEzLjA1IC0xMC4zNSwyMC44OSAtMTkuNjksMjUuMDUgLTQuNTcsMi4wNiAtMTAuMzUsMy4xMSAtMTcuMzIsMy4xMSB6IG0gODEuMTgsLTk4Ljk2IDAuNzUsLTEyLjc1IGggLTUuMzIgbCAtMjMuNyw3LjEyIHYgMy44NiBsIDEwLjUsNC44NyB2IDg5LjE3IGMgMCw2LjA3IC0zLjExLDcuNDIgLTExLjI1LDguNDQgdiA2LjUyIGggNDAuMzEgdiAtNi41MiBjIC04LjE3LC0xLjAxIC0xMS4yNSwtMi4zNiAtMTEuMjUsLTguNDQgViAyNTAuNCBsIC0wLjA0LC0wLjA0IHogbSAxNjAuMzEsMTA4Ljc1IGggMy4xMSBsIDI3LjI2LC01LjE3IHYgLTYuNjcgbCAtMy44MiwtMC4zIGMgLTYuMzcsLTAuNiAtOC4wMiwtMS45MSAtOC4wMiwtNy4xMiB2IC00Ny41NSBsIDAuNzUsLTE1LjI2IGggLTQuMzEgbCAtMjUuNzYsMy43MSB2IDYuNTIgbCAyLjUxLDAuNDUgYyA2Ljk3LDEuMDEgOS4wNCwyLjk2IDkuMDQsNy44NCB2IDQyLjM3IGMgLTYuNjcsNS4xNyAtMTMuMDUsOC40NCAtMjAuNjIsOC40NCAtOC40LDAgLTEzLjYxLC00LjI3IC0xMy42MSwtMTQuMjUgdiAtMzkuNzkgbCAwLjc1LC0xNS4yNiBoIC00LjQyIGwgLTI1LjgsMy43MSB2IDYuNTIgbCAyLjY2LDAuNDUgYyA2Ljk3LDEuMDEgOS4wNCwyLjk2IDkuMDQsNy44NCB2IDM5LjExIGMgMCwxNi41NyA5LjM3LDI0LjQ1IDI0LjMsMjQuNDUgMTEuNCwwIDIwLjc0LC02LjA3IDI3Ljc1LC0xNC41MSBsIC0wLjc1LDE0LjUxIC0wLjA0LC0wLjA0IHogTSA0ODQuMywzMDYuMzYgYyAwLC0yMS4xOSAtMTEuMjUsLTI5LjMyIC0zMS41NywtMjkuMzIgLTE3LjkyLDAgLTMwLjk0LDcuNDIgLTMwLjk0LDE5LjcyIDAsMy42NyAxLjMxLDYuNDkgMy45Nyw4LjQ0IGwgMTMuNjUsLTEuOCBjIC0wLjYsLTQuMTIgLTAuOSwtNi42NCAtMC45LC03LjY5IDAsLTYuOTcgMy43MSwtMTAuNSAxMS4yNSwtMTAuNSAxMS4xNCwwIDE2Ljc2LDcuODQgMTYuNzYsMjAuNDQgdiA0LjEyIGwgLTI4LjEyLDguNDQgYyAtOS4zNywyLjU1IC0xNC43LDQuNzYgLTE4LjI2LDkuOTQgLTEuODksMy4xNyAtMi44LDYuODIgLTIuNjIsMTAuNSAwLDEyIDguMjUsMjAuNDcgMjIuMzUsMjAuNDcgMTAuMiwwIDE5LjI0LC00LjYxIDI3LjExLC0xMy4zNSAyLjgxLDguNzQgNy4xMiwxMy4zNSAxNC44MSwxMy4zNSA2LjIyLDAgMTEuODUsLTIuNTEgMTYuODcsLTcuNDIgbCAtMS41LC01LjE3IGMgLTIuMTcsMC42IC00LjI3LDAuOSAtNi40OSwwLjkgLTQuMzEsMCAtNi4zNywtMy40MSAtNi4zNywtMTAuMDkgdiAtMzAuOTcgeiBtIC0zNiw0MC43NiBjIC03LjY5LDAgLTEyLjQ1LC00LjQ2IC0xMi40NSwtMTIuMyAwLC01LjMyIDIuNTEsLTguNDQgNy44NywtMTAuMjQgbCAyMi44LC03LjI0IHYgMjEuOSBjIC03LjI3LDUuNTEgLTExLjU1LDcuODcgLTE4LjIyLDcuODcgeiBtIDIzNy4zNiw2LjgyIHYgLTYuNjcgbCAtMy44NiwtMC4zIGMgLTYuMzcsLTAuNiAtNy45OSwtMS45MSAtNy45OSwtNy4xMiB2IC04OS40NyBsIDAuNzUsLTEyLjc1IGggLTUuMzYgbCAtMjMuNyw3LjEyIHYgMy44NiBsIDEwLjUsNC44NyB2IDI5LjMyIGMgLTUuOTEsLTQuMDUgLTEyLjk4LC02LjA4IC0yMC4xNCwtNS43NyAtMjMuNTUsMCAtNDEuOTIsMTcuOTIgLTQxLjkyLDQ0Ljc0IDAsMjIuMDkgMTMuMiwzNy4zNSAzNC45NSwzNy4zNSAxMS4yNSwwIDIxLjA0LC01LjQ3IDI3LjExLC0xMy45NSBsIC0wLjc1LDEzLjk1IGggMy4xNSBsIDI3LjI2LC01LjE3IHYgMCB6IG0gLTQ5LjM1LC02OC4wMiBjIDExLjI1LDAgMTkuNjksNi41MiAxOS42OSwxOC41MiB2IDMzLjc1IGMgLTUuMTgsNS4xNiAtMTIuMjMsOCAtMTkuNTQsNy44NyAtMTYuMTIsMCAtMjQuMywtMTIuNzUgLTI0LjMsLTI5Ljc3IDAsLTE5LjEyIDkuMzQsLTMwLjM3IDI0LjE1LC0zMC4zNyB6IE0gNzQzLjMsMzAyLjggYyAtMi4xLC05LjkgLTguMTcsLTE1LjUyIC0xNi42MSwtMTUuNTIgLTEyLjYsMCAtMjEuMzQsOS40OSAtMjEuMzQsMjMuMSAwLDIwLjE0IDEwLjY1LDMzLjE5IDI3Ljg2LDMzLjE5IDExLjQ4LC0wLjEyIDIyLjA0LC02LjMzIDI3LjcxLC0xNi4zMSBsIDUuMDIsMS4zNSBjIC0yLjI1LDE3LjQ3IC0xOC4wNywzMC41MiAtMzcuNSwzMC41MiAtMjIuOCwwIC0zOC41MSwtMTYuODcgLTM4LjUxLC00MC44NyAwLC0yNCAxNy4wNiwtNDEuMjEgMzkuODYsLTQxLjIxIDE3LjAyLDAgMjkuMDIsMTAuMjQgMzIuODksMjguMDEgbCAtNTkuNCwxOC4yMiB2IC04LjAyIGwgNDAuMDEsLTEyLjQxIHYgLTAuMDQgeiIKICAgICAgIHNoYXBlLXJlbmRlcmluZz0ib3B0aW1pemVRdWFsaXR5IgogICAgICAgaWQ9InBhdGgxNDkiIC8+CiAgPC9nPgo8L3N2Zz4K" alt="Claude Code"><span class="cap">Claude Code</span></div>
+      <div class="sticker light" style="left:38%;top:7%;width:300px;transform:rotate(3deg);padding-bottom:34px"><img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0idXRmLTgiPz4NCjwhLS0gR2VuZXJhdG9yOiBBZG9iZSBJbGx1c3RyYXRvciAyOC4yLjAsIFNWRyBFeHBvcnQgUGx1Zy1JbiAuIFNWRyBWZXJzaW9uOiA2LjAwIEJ1aWxkIDApICAtLT4NCjxzdmcgdmVyc2lvbj0iMS4xIiBpZD0iTGF5ZXJfMSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB4bWxuczp4bGluaz0iaHR0cDovL3d3dy53My5vcmcvMTk5OS94bGluayIgeD0iMHB4IiB5PSIwcHgiDQoJIHZpZXdCb3g9IjAgMCAxMTgwIDMyMCIgc3R5bGU9ImVuYWJsZS1iYWNrZ3JvdW5kOm5ldyAwIDAgMTE4MCAzMjA7IiB4bWw6c3BhY2U9InByZXNlcnZlIj4NCjxwYXRoIGQ9Ik00NDQuNyw2OC4yYy00Ny4zLDAtODYuMSwzOC43LTg2LjEsODYuMXMzOC43LDg2LjEsODYuMSw4Ni4xczg2LjEtMzguNSw4Ni4xLTg2LjFTNDkyLjIsNjguMiw0NDQuNyw2OC4yeiBNNDQ0LjcsMjA5LjUNCgljLTI5LjQsMC01My4xLTI0LjEtNTMuMS01NS4yUzQxNS4zLDk5LDQ0NC43LDk5YzI5LjQsMCw1My4xLDI0LjEsNTMuMSw1NS4yUzQ3NC4xLDIwOS41LDQ0NC43LDIwOS41eiIvPg0KPHBhdGggZD0iTTYxNy43LDExNmMtMTUuNSwwLTMwLjYsNi4yLTM4LjUsMTYuN3YtMTQuM2gtMzEuMXYxNjcuM2gzMS4xdi02MC41YzcuOSw5LjgsMjIuNSwxNS4xLDM4LjUsMTUuMQ0KCWMzMy41LDAsNTkuOC0yNi4zLDU5LjgtNjIuMlM2NTEuMiwxMTYsNjE3LjcsMTE2eiBNNjEyLjUsMjEzLjNjLTE3LjcsMC0zMy41LTEzLjktMzMuNS0zNS4xczE1LjgtMzUuMSwzMy41LTM1LjENCgljMTcuNywwLDMzLjUsMTMuOSwzMy41LDM1LjFTNjMwLjIsMjEzLjMsNjEyLjUsMjEzLjN6Ii8+DQo8cGF0aCBkPSJNNzUwLjYsMTE2Yy0zMy45LDAtNjAuNywyNi41LTYwLjcsNjIuMnMyMy40LDYyLjIsNjEuNyw2Mi4yYzMxLjMsMCw1MS40LTE4LjksNTcuNi00MC4yaC0zMC40DQoJYy0zLjgsOC44LTE0LjYsMTUuMS0yNy41LDE1LjFjLTE2LDAtMjguMi0xMS4yLTMxLjEtMjcuM2g5MC40di0xMi4yQzgxMC42LDE0My4yLDc4Ny45LDExNiw3NTAuNiwxMTZ6IE03MjAuNSwxNjUuOQ0KCWMzLjMtMTUuMSwxNS44LTI0LjksMzAuOC0yNC45YzE2LDAsMjguMiwxMC41LDI5LjYsMjQuOUg3MjAuNXoiLz4NCjxwYXRoIGQ9Ik04OTMuMywxMTZjLTEzLjksMC0yOC40LDYuMi0zNS4xLDE2LjV2LTE0LjFoLTMxLjF2MTE5LjVoMzEuMXYtNjQuM2MwLTE4LjYsMTAtMzAuOCwyNi4zLTMwLjhjMTUuMSwwLDIzLjIsMTEuNSwyMy4yLDI3LjUNCgl2NjcuNmgzMS4xdi03Mi43QzkzOC44LDEzNS42LDkyMC42LDExNiw4OTMuMywxMTZ6Ii8+DQo8cGF0aCBkPSJNMTAxOC4zLDcwLjZsLTY3LjYsMTY3LjNoMzMuMmwxNC4zLTM2LjZoNzdsMTQuMywzNi42aDMzLjdsLTY3LjItMTY3LjNIMTAxOC4zeiBNMTAwOSwxNzMuNmwyNy43LTcwbDI3LjUsNzBIMTAwOXoiLz4NCjxwYXRoIGQ9Ik0xMTY3LjUsNzAuNkgxMTM2djE2Ny4zaDMxLjZWNzAuNnoiLz4NCjxwYXRoIGlkPSJtYXJrIiBkPSJNMTIzLjIsMTE4LjNWODVjMC0yLjIsMC42LTMuOCwyLjktNS4xTDE4Ny45LDQ0YzguMy00LjgsMTguOS03LDI5LjItN2MzOS4xLDAsNjMuOCwzMC4xLDYzLjgsNjIuNQ0KCWMwLDIuNiwwLDYuMS0wLjYsOWwtNjQuNy0zNy44Yy0zLjItMS45LTYuNy0yLjItMTAuNiwwTDEyMy4yLDExOC4zeiBNMjY2LjEsMjM2LjZ2LTc0YzAtNC4yLTEuNi03LTUuNC05LjNsLTgyLTQ3LjdsMjguOC0xNi43DQoJYzEuNi0xLDQuMi0xLDUuOCwwbDYyLjIsMzUuOWMxNy42LDEwLjMsMjkuOCwzMi43LDI5LjgsNTQuMUMzMDUuMiwyMDQuMiwyODkuOCwyMjcuNiwyNjYuMSwyMzYuNnogTTEwNi4yLDE3Mi44bC0yOC41LTE3DQoJYy0yLjItMS4zLTIuOS0yLjktMi45LTUuMVY3OS4zYzAtMzQuOSwyNi42LTYxLjIsNjIuOC02MS4yYzE0LjEsMCwyNy42LDQuOCwzOC40LDEzLjVMMTExLjcsNjljLTMuOCwyLjItNS40LDUuMS01LjQsOS4zVjE3Mi44eg0KCSBNMTYyLDIwNC45bC0zOC44LTIxLjh2LTQ2LjFsMzguOC0yMS44bDM4LjQsMjEuOHY0Ni4xTDE2MiwyMDQuOXogTTE4NiwzMDEuOWMtMTQuMSwwLTI3LjYtNC44LTM4LjQtMTMuNUwyMTIsMjUxDQoJYzMuOC0yLjIsNS40LTUuMSw1LjQtOS4zdi05NC41bDI4LjgsMTdjMi4yLDEuMywyLjksMi45LDIuOSw1LjF2NzEuNUMyNDkuMSwyNzUuNywyMjIuMiwzMDEuOSwxODYsMzAxLjl6IE0xMTAuNCwyMzEuMWwtNjIuMi0zNS45DQoJYy0xNy42LTEwLjMtMjkuOC0zMi43LTI5LjgtNTQuMWMwLTI1LjYsMTUuNy00OC43LDM5LjQtNTcuN3Y3NC4zYzAsNC4yLDEuNiw3LDUuNCw5LjNsODEuNyw0Ny40bC0yOC44LDE2LjcNCglDMTE0LjYsMjMyLjEsMTEyLDIzMi4xLDExMC40LDIzMS4xeiBNMTA2LjUsMjgzYy0zNi44LDAtNjMuOC0yNy42LTYzLjgtNjEuOGMwLTMuMiwwLjMtNi40LDAuNi05LjNsNjQuNCwzNy4yYzMuOCwyLjIsNywyLjIsMTAuOSwwDQoJbDgxLjctNDcuNFYyMzVjMCwyLjItMC42LDMuOC0yLjksNS4xTDEzNS43LDI3NkMxMjcuNCwyODAuOCwxMTYuOCwyODMsMTA2LjUsMjgzeiBNMTg2LDMxOS4yYzM4LjQsMCw3MC41LTI3LjYsNzcuNS02NC4xDQoJYzM1LjktOSw1OS00Mi4zLDU5LTc2LjNjMC0yMi40LTkuNi00My45LTI3LjItNTkuNmMxLjYtNi43LDIuOS0xMy44LDIuOS0yMC41YzAtNDUuMi0zNi44LTc5LjEtNzkuMS03OS4xYy04LjcsMC0xNy4zLDEuNi0yNS42LDQuNQ0KCUMxNzksOS43LDE1OS40LDAuOCwxMzcuNiwwLjhjLTM4LjQsMC03MC41LDI3LjYtNzcuNSw2NC4xYy0zNS45LDktNTksNDIuMy01OSw3Ni4zYzAsMjIuNCw5LjYsNDMuOSwyNy4yLDU5LjYNCgljLTEuNiw2LjctMi45LDEzLjgtMi45LDIwLjVjMCw0NS4yLDM2LjgsNzkuMSw3OS4xLDc5LjFjOC43LDAsMTcuMy0xLjYsMjUuNi00LjVDMTQ0LjcsMzEwLjMsMTY0LjIsMzE5LjIsMTg2LDMxOS4yeiIvPg0KPC9zdmc+DQo=" alt="Codex (OpenAI)"><span class="cap">Codex</span></div>
+      <div class="sticker light" style="left:71%;top:15%;width:240px;transform:rotate(-3deg)"><img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiIHN0YW5kYWxvbmU9Im5vIj8+CjxzdmcKICAgeG1sbnM6ZGM9Imh0dHA6Ly9wdXJsLm9yZy9kYy9lbGVtZW50cy8xLjEvIgogICB4bWxuczpjYz0iaHR0cDovL2NyZWF0aXZlY29tbW9ucy5vcmcvbnMjIgogICB4bWxuczpyZGY9Imh0dHA6Ly93d3cudzMub3JnLzE5OTkvMDIvMjItcmRmLXN5bnRheC1ucyMiCiAgIHhtbG5zOnN2Zz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciCiAgIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIKICAgd2lkdGg9IjE3OS43MTQ5NSIKICAgaWQ9InN2ZzM0IgogICB2ZXJzaW9uPSIxLjEiCiAgIGZpbGw9ImN1cnJlbnRDb2xvciIKICAgdmlld0JveD0iMCAwIDE3OS43MTQ5NSA4Ni42OTYwMDEiCiAgIGhlaWdodD0iMjIuNTIxMDMiPgogIDxtZXRhZGF0YQogICAgIGlkPSJtZXRhZGF0YTQwIj4KICAgIDxyZGY6UkRGPgogICAgICA8Y2M6V29yawogICAgICAgICByZGY6YWJvdXQ9IiI+CiAgICAgICAgPGRjOmZvcm1hdD5pbWFnZS9zdmcreG1sPC9kYzpmb3JtYXQ+CiAgICAgICAgPGRjOnR5cGUKICAgICAgICAgICByZGY6cmVzb3VyY2U9Imh0dHA6Ly9wdXJsLm9yZy9kYy9kY21pdHlwZS9TdGlsbEltYWdlIiAvPgogICAgICAgIDxkYzp0aXRsZT48L2RjOnRpdGxlPgogICAgICA8L2NjOldvcms+CiAgICA8L3JkZjpSREY+CiAgPC9tZXRhZGF0YT4KICA8ZGVmcwogICAgIGlkPSJkZWZzMzgiIC8+CiAgPHBhdGgKICAgICBpZD0icGF0aDIiCiAgICAgZD0ibSAtMTM4LjA2MjA0LDQwLjQwOCBjIDAsMjAuMDY0IDExLjUyOCwzMi40NzIgMzEuMzI4LDMyLjQ3MiAxOC4yMTYwMDksMCAzMC43MTIwMTksLTEwLjM4NCAzMC43MTIwMTksLTI5LjQ4IFYgMzcuNTA0IEggLTEwNi41NTgwNCBWIDQ4LjY4IGggMTUuNjY0MDA5IGMgLTAuNjE2LDcuNDggLTYuNDI0MDA1LDEyLjQwOCAtMTUuNDg4MDA5LDEyLjQwOCAtOS45NDQsMCAtMTYuNjMyLC01LjcyIC0xNi42MzIsLTE2LjU0NCBWIDM1LjkyIGMgMCwtOS44NTYgNS44MDgsLTE2LjQ1NiAxNi4wMTYsLTE2LjQ1NiA3LjMwNDAwNCwwIDEyLjQ5NjAwNCwzLjUyIDE0LjA4MDAwOSw5LjA2NCBoIDE0Ljc4NDAxIEMgLTc5LjgwNjAyNiwxNS42OCAtOTEuMjQ2MDMxLDcuMDU2IC0xMDYuODIyMDQsNy4wNTYgYyAtMTguNjU2LDAgLTMxLjI0LDEyLjMyIC0zMS4yNCwzMy4zNTIgeiIgLz4KICA8cGF0aAogICAgIGlkPSJwYXRoNCIKICAgICBkPSJtIC03MS44NTAwMjEsMTkuNjQgaCAxMy4zNzYwMSBWIDYuNTI4IGggLTEzLjM3NjAxIHogbSAwLDUyLjM2IGggMTMuMzc2MDEgViAyNC44MzIgaCAtMTMuMzc2MDEgeiIgLz4KICA8cGF0aAogICAgIGlkPSJwYXRoNiIKICAgICBkPSJtIC0zMS41MTI5OTEsMzUuNjU2IGggOS4zMjgwMDUgViAyNC44MzIgaCAtOS4zMjgwMDUgViAxMC4wNDggaCAtMTMuMzc2MDEgdiAxNC43ODQgaCAtOC4zNjAwMDUgdiAxMC44MjQgaCA4LjM2MDAwNSB2IDI1Ljk2IGMgMCw2LjI0OCAyLjY0LDEwLjM4NCAxMC41NjAwMDUsMTAuMzg0IGggMTIuMTQ0MDEgViA2MS40NCBoIC05LjMyODAwNSB6IiAvPgogIDxwYXRoCiAgICAgaWQ9InBhdGg4IgogICAgIGQ9Ik0gLTE2LjIzMzk4MSw3MiBIIC0xLjk3Nzk3NTcgViA0NC45ODQgSCAyNi45NzQwNDQgViA3MiBoIDE0LjI1NjAxIFYgNy44NDggSCAyNi45NzQwNDQgViAzMy43MiBIIC0xLjk3Nzk3NTcgViA3Ljg0OCBIIC0xNi4yMzM5ODEgWiIgLz4KICA8cGF0aAogICAgIGlkPSJwYXRoMTAiCiAgICAgZD0ibSA5Mi45NDIwODksMjQuODMyIGggLTEzLjM3NjAxIHYgMjQuOTA0IGMgMCw3LjEyOCAtMy44NzIsMTIuMjMyIC0xMC4yMDgwMDUsMTIuMjMyIC01LjI4MDAwNSwwIC04LjI3MjAwNSwtMy4xNjggLTguMjcyMDA1LC05Ljc2OCBWIDI0LjgzMiBoIC0xMy40NjQwMSB2IDI5LjQ4IGMgMCwxMS4yNjQgNS4xOTIwMDUsMTguNTY4IDE1Ljc1MjAxLDE4LjU2OCA3LjQ4MDAwNSwwIDEyLjU4NDAxLC0zLjYwOCAxNS4zMTIwMSwtOS41MDQgaCAwLjc5MiBsIDEuNzYsOC42MjQgaCAxMS43MDQwMSB6IiAvPgogIDxwYXRoCiAgICAgaWQ9InBhdGgxMiIKICAgICBkPSJtIDk5LjQzODA4OSw3MiBoIDExLjcwNDAwMSBsIDEuNjcyLC04LjQ0OCBoIDAuNzkyIGMgMi43MjgsNi4wNzIgOC44LDkuMzI4IDE1LjU3Niw5LjMyOCAxMi4xNDQsMCAxOS4xODQsLTkuMDY0IDE5LjE4NCwtMjQuMzc2IDAsLTE1LjQ4OCAtNy4yMTYsLTI0LjU1MiAtMTkuNDQ4LC0yNC41NTIgLTcuNTY4LDAgLTEzLjExMiwzLjg3MiAtMTUuMzEyLDkuNTA0IGggLTAuNzkyIFYgNi41MjggSCA5OS40MzgwODkgWiBNIDExMi44MTQwOSw1MC41MjggViA0Ni40OCBjIDAsLTcuMDQgNC40ODgsLTExLjYxNiAxMS40NCwtMTEuNjE2IDYuMzM2LDAgMTAuNDcyLDMuMjU2IDEwLjQ3Miw5Ljg1NiB2IDcuNTY4IGMgMCw1LjgwOCAtMy4zNDQsOS43NjggLTEwLjM4NCw5Ljc2OCAtNy4xMjgsMCAtMTEuNTI4LC00LjY2NCAtMTEuNTI4LC0xMS41MjggeiIgLz4KICA8cGF0aAogICAgIGlkPSJwYXRoMTQiCiAgICAgZD0ibSAxOTYuMjEwMDksNzIuODggYyAxNi4xMDQsMCAyNy40NTYsLTguOTc2IDI5LjM5MiwtMjMuMTQ0IGggLTEyLjA1NiBjIC0xLjc2LDguMDA4IC04LjM2LDEyLjkzNiAtMTcuMTYsMTIuOTM2IC0xMC45MTIsMCAtMTcuODY0LC03LjEyOCAtMTcuODY0LC0xNy4yNDggViAzNC45NTIgYyAwLC0xMSA3LjIxNiwtMTcuNjg4IDE4LjA0LC0xNy42ODggOS42OCwwIDE1LjU3Niw1LjE5MiAxNi45ODQsMTIuODQ4IGggMTIuMDU2IGMgLTEuNDA4LC0xMy45OTIgLTEyLjQwOCwtMjMuMTQ0IC0yOC42ODgsLTIzLjE0NCAtMTkuMjcyLDAgLTMwLjUzNiwxMi40OTYgLTMwLjUzNiwzMy4wODggMCwyMC40MTYgMTEuMDg4LDMyLjgyNCAyOS44MzIsMzIuODI0IHoiIC8+CiAgPHBhdGgKICAgICBpZD0icGF0aDE2IgogICAgIGQ9Im0gMjI4Ljg1MjA5LDQ4LjY4IGMgMCwxNC45NiA4Ljk3NiwyNC4yIDIyLjg4LDI0LjIgMTQuNTIsMCAyMi45NjgsLTkuNjggMjIuOTY4LC0yNC4yIDAsLTE1LjQ4OCAtOS41MDQsLTI0LjIgLTIyLjk2OCwtMjQuMiAtMTMuOTA0LDAgLTIyLjg4LDkuMTUyIC0yMi44OCwyNC4yIHogbSAxMS4wODgsMy43ODQgViA0NS4xNiBjIDAsLTcuMjE2IDQuNjY0LC0xMS43MDQgMTEuNzkyLC0xMS43MDQgNi45NTIsMCAxMS43OTIsNC40IDExLjc5MiwxMS43MDQgdiA3LjMwNCBjIDAsNy40OCAtNC45MjgsMTEuNDQgLTExLjc5MiwxMS40NCAtNi42ODgsMCAtMTEuNzkyLC0zLjg3MiAtMTEuNzkyLC0xMS40NCB6IiAvPgogIDxwYXRoCiAgICAgaWQ9InBhdGgxOCIKICAgICBkPSJtIDI3OC45OTIwOSw4Ni42OTYgaCAxMC45MTIgViA2My4yODggaCAwLjcwNCBjIDIuNTUyLDUuNTQ0IDguMDk2LDkuMTUyIDE2LjAxNiw5LjE1MiAxMS43OTIsMCAxOS4wOTYsLTguNjI0IDE5LjA5NiwtMjQuMDI0IDAsLTE1LjA0OCAtNy4xMjgsLTIzLjkzNiAtMTkuMDk2LC0yMy45MzYgLTcuMTI4LDAgLTEzLjExMiwzLjI1NiAtMTYuMDE2LDkuMTUyIGggLTAuNzA0IGwgLTEuMzIsLTguMjcyIGggLTkuNTkyIHogbSAyMy43NiwtMjMuMTQ0IGMgLTcuNzQ0LDAgLTEyLjg0OCwtNS4wMTYgLTEyLjg0OCwtMTIuNzYgdiAtNC42NjQgYyAwLC03LjY1NiA1LjAxNiwtMTIuNzYgMTIuOTM2LC0xMi43NiA3LjY1NiwwIDExLjYxNiw0LjQgMTEuNjE2LDExIHYgOC4xODQgYyAwLDcuMDQgLTQuNTc2LDExIC0xMS43MDQsMTEgeiIgLz4KICA8cGF0aAogICAgIGlkPSJwYXRoMjAiCiAgICAgZD0ibSAzMjkuOTE1MDksMTguNzYgaCAxMC44MjQgViA2Ljk2OCBoIC0xMC44MjQgeiBtIDAsNTMuMjQgaCAxMC44MjQgViAyNS4zNiBoIC0xMC44MjQgeiIgLz4KICA8cGF0aAogICAgIGlkPSJwYXRoMjIiCiAgICAgZD0ibSAzNDYuNTA4MDksNzIgaCAxMC44MjQgViA2Ljk2OCBoIC0xMC44MjQgeiIgLz4KICA8cGF0aAogICAgIGlkPSJwYXRoMjQiCiAgICAgZD0ibSAzNjEuNjA1MDksNDguNjggYyAwLDE0Ljk2IDguOTc2LDI0LjIgMjIuODgsMjQuMiAxNC41MiwwIDIyLjk2OCwtOS42OCAyMi45NjgsLTI0LjIgMCwtMTUuNDg4IC05LjUwNCwtMjQuMiAtMjIuOTY4LC0yNC4yIC0xMy45MDQsMCAtMjIuODgsOS4xNTIgLTIyLjg4LDI0LjIgeiBtIDExLjA4OCwzLjc4NCBWIDQ1LjE2IGMgMCwtNy4yMTYgNC42NjQsLTExLjcwNCAxMS43OTIsLTExLjcwNCA2Ljk1MiwwIDExLjc5Miw0LjQgMTEuNzkyLDExLjcwNCB2IDcuMzA0IGMgMCw3LjQ4IC00LjkyOCwxMS40NCAtMTEuNzkyLDExLjQ0IC02LjY4OCwwIC0xMS43OTIsLTMuODcyIC0xMS43OTIsLTExLjQ0IHoiIC8+CiAgPHBhdGgKICAgICBpZD0icGF0aDI2IgogICAgIGQ9Im0gNDI2LjI2NTA5LDM0LjI0OCBoIDkuNTA0IFYgMjUuMzYgaCAtOS41MDQgViAxMC40IGggLTEwLjgyNCB2IDE0Ljk2IGggLTguMzYgdiA4Ljg4OCBoIDguMzYgdiAyOS4wNCBjIDAsNS4xOTIgMi4yLDguNzEyIDguODg4LDguNzEyIGggMTEuNDQgdiAtOC43MTIgaCAtOS41MDQgeiIgLz4KICA8cGF0aAogICAgIGlkPSJwYXRoMjgiCiAgICAgZD0ibSAtMjIyLjA1NDA0LDQ5LjkwMzEgYyAwLC0yLjE1NTYgMS43NDc1LC0zLjkwMzEgMy45MDMxLC0zLjkwMzEgMi4xNTU2LDAgMy45MDMxLDEuNzQ3NSAzLjkwMzEsMy45MDMxIHYgNy4xOTM4IGMgMCwyLjE1NTYgLTEuNzQ3NSwzLjkwMzEgLTMuOTAzMSwzLjkwMzEgLTIuMTU1NiwwIC0zLjkwMzEsLTEuNzQ3NSAtMy45MDMxLC0zLjkwMzEgeiIgLz4KICA8cGF0aAogICAgIGlkPSJwYXRoMzAiCiAgICAgZD0ibSAtMTk4LjE1MDk0LDQ2IGMgLTIuMTU1NiwwIC0zLjkwMzEsMS43NDc1IC0zLjkwMzEsMy45MDMxIHYgNy4xOTM4IGMgMCwyLjE1NTYgMS43NDc1LDMuOTAzMSAzLjkwMzEsMy45MDMxIDIuMTU1NiwwIDMuOTAzMSwtMS43NDc1IDMuOTAzMSwtMy45MDMxIHYgLTcuMTkzOCBjIDAsLTIuMTU1NiAtMS43NDc1LC0zLjkwMzEgLTMuOTAzMSwtMy45MDMxIHoiIC8+CiAgPHBhdGgKICAgICBpZD0icGF0aDMyIgogICAgIGQ9Im0gLTE2MC4wNTQwNCw0Ni4yIHYgMTAuNzU4IGMgLTAuMDAzLDEuMzg5MSAtMC42OTEyLDIuNzQzMyAtMS44MTIsMy41NjQgLTEzLjIzMSw5LjY4NjMgLTI5LjU1NjksMTcuNDc4IC00Ni4xODgsMTcuNDc4IC0xOC4zOTk2LDAgLTM2LjgyMTMsLTEwLjYwMjUgLTQ2LjE4OCwtMTcuNDc4IC0xLjEyMDc2LC0wLjgyMDcgLTEuODA5MjksLTIuMTc0OSAtMS44MTIsLTMuNTY0IFYgNDYuMiBjIDAsLTEuNDE2IDAuNDUsLTIuNzg0IDEuMjg0LC0zLjkyNCBsIDIuOTIyLC0zLjk1NCBjIDEuNTY0OTQsLTIuMTIxNCAzLjg5MjI0LC0yLjY4MiA2LjM3MiwtMi42ODIgMC45MzYsLTEwLjY4IDMuMTUsLTE4LjMgOC40NDIsLTIzLjg4IDEwLjA4LC0xMC42OCAyMy40NiwtMTEuNzYgMjguOTgsLTExLjc2IDUuNTIsMCAxOC45LDEuMDggMjguOTgsMTEuNzYgNS4yODYsNS41OCA3LjUwNiwxMy4yIDguNDQyLDIzLjg4IDIuNDg0NywwIDQuODAxOCwwLjU1MSA2LjM2NiwyLjY4MiBsIDIuOTIyLDMuOTYgYyAwLjg0LDEuMTQgMS4yOSwyLjUwMiAxLjI5LDMuOTE4IHogbSAtMTguMzEyLC00Ljg5IGMgLTAuMTI4MiwtMi40NTAzIC0yLjExNzksLTMuNDExOCAtNC4xODgsLTQuMDkyIC0yLjE4MjcsMS4zNjk0IC00Ljg0NzgsMS45MDggLTcuMzk4LDEuOTA4IC0yLjcxMiwwIC03Ljc3LC0wLjY0OCAtMTEuOTc2LC00Ljg0OCAtMS4wNjIsLTEuMDU2IC0xLjc4OCwtMi43MTIgLTIuMjgsLTQuNTQ4IC0xLjI3NiwtMC4xMjk4IC0yLjU1NzUsLTAuMTk3OCAtMy44NCwtMC4yMDQgLTEuMTQsMCAtMi40NTQsMC4wNjYgLTMuODUyLDAuMjA0IC0wLjQ5MiwxLjgzNiAtMS4yMTgsMy40OTIgLTIuMjgsNC41NDggLTQuMiw0LjIgLTkuMjY0LDQuODQ4IC0xMS45NzYsNC44NDggLTIuNTUwOCwwIC01LjIyMjgsLTAuNTMyNiAtNy40MDQsLTEuOTA4IC0yLjA2MzQsMC42NzggLTQuMDQ0OCwxLjY1NTcgLTQuMTc2LDQuMDkyIC0wLjIxOTcsNC42MDUyIC0wLjIzODgsOS4yMDYgLTAuMjU3OSwxMy44MDkgLTAuMDEsMi4zMTAyIC0wLjAxOTEsNC42MjA5IC0wLjA1NDEsNi45MzMgMC4wMDksMS4zNDIgMC44MTgyLDIuNTg4NyAyLjA0LDMuMTQ0IDkuOTMsNC41MjQgMTkuMzIsNi44MDQgMjcuOTYsNi44MDQgOC42MjgsMCAxOC4wMTgsLTIuMjggMjcuOTQyLC02LjgwNCAxLjIyMTgsLTAuNTU1MyAyLjAzMDcsLTEuODAyIDIuMDQsLTMuMTQ0IDAuMTE5LC02LjkwNjkgMC4wMjMyLC0xMy44NDE5IC0wLjMwNiwtMjAuNzQyIHogbSAtNTcuNTI4LC05LjYzIGMgMS42MiwxLjYyIDQuNjgsMi43IDcuOTgsMi43IDIuNTIsMCA3LjMyLC0wLjU0IDExLjI4LC00LjU2IDEuNzQsLTEuNjggMi44MiwtNS44OCAyLjcsLTEwLjE0IC0wLjEyLC0zLjQyIC0xLjA4LC02LjI0IC0yLjUyLC03LjQ0IC0xLjU2LC0xLjM4IC01LjEsLTEuOTggLTkuMDYsLTEuNjIgLTQuMiwwLjQyIC03Ljc0LDEuOCAtOS41NCwzLjcyIC0zLjksNC4yNiAtMy4wNiwxNS4wNiAtMC44NCwxNy4zNCB6IG0gMjQuNDgsLTEwLjUgYyAwLjEyLDAuNjYgMC4xOCwxLjM4IDAuMjQsMi4xNiAwLDAuNTQgMCwxLjA4IC0wLjA2LDEuNjggMS4yLC0wLjEyIDIuMjIsLTAuMTIgMy4xOCwtMC4xMiAwLjk1OTksMCAxLjk4LDAgMy4xOCwwLjEyIC0wLjA2LC0wLjYgLTAuMDYsLTEuMTM5OSAtMC4wNiwtMS42Nzk5IDAuMDYsLTAuNzggMC4xMiwtMS41MDAxIDAuMjQsLTIuMTYwMSAtMS4yNiwtMC4xMiAtMi40LC0wLjE4IC0zLjM2LC0wLjE4IC0wLjk2LDAgLTIuMSwwLjA2IC0zLjM2LDAuMTggeiBtIDkuMjQsLTEuNSBjIC0wLjEyLDQuMjYgMC45Niw4LjQ2IDIuNywxMC4xNCAzLjk2LDQuMDIgOC43Niw0LjU2IDExLjI4LDQuNTYgMy4zLDAgNi4zNiwtMS4wOCA3Ljk4LC0yLjcgMi4yMiwtMi4yOCAzLjA2LC0xMy4wOCAtMC44NCwtMTcuMzQgLTEuOCwtMS45MiAtNS4zNCwtMy4zIC05LjU0LC0zLjcyIC0zLjk2LC0wLjM2IC03LjUsMC4yNCAtOS4wNiwxLjYyIC0xLjQ0LDEuMiAtMi40LDQuMDIgLTIuNTIsNy40NCB6IgogICAgIGNsaXAtcnVsZT0iZXZlbm9kZCIKICAgICBmaWxsLXJ1bGU9ImV2ZW5vZGQiIC8+Cjwvc3ZnPgo=" alt="GitHub Copilot"></div>
+      <div class="sticker dark" style="left:6%;top:62%;width:300px;transform:rotate(4deg)"><img src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjM0IiBoZWlnaHQ9IjQyIiB2aWV3Qm94PSIwIDAgMjM0IDQyIiBmaWxsPSJub25lIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPgo8cGF0aCBkPSJNMTggMzBINlYxOEgxOFYzMFoiIGZpbGw9IiM0QjQ2NDYiLz4KPHBhdGggZD0iTTE4IDEySDZWMzBIMThWMTJaTTI0IDM2SDBWNkgyNFYzNloiIGZpbGw9IiNCN0IxQjEiLz4KPHBhdGggZD0iTTQ4IDMwSDM2VjE4SDQ4VjMwWiIgZmlsbD0iIzRCNDY0NiIvPgo8cGF0aCBkPSJNMzYgMzBINDhWMTJIMzZWMzBaTTU0IDM2SDM2VjQySDMwVjZINTRWMzZaIiBmaWxsPSIjQjdCMUIxIi8+CjxwYXRoIGQ9Ik04NCAyNFYzMEg2NlYyNEg4NFoiIGZpbGw9IiM0QjQ2NDYiLz4KPHBhdGggZD0iTTg0IDI0SDY2VjMwSDg0VjM2SDYwVjZIODRWMjRaTTY2IDE4SDc4VjEySDY2VjE4WiIgZmlsbD0iI0I3QjFCMSIvPgo8cGF0aCBkPSJNMTA4IDM2SDk2VjE4SDEwOFYzNloiIGZpbGw9IiM0QjQ2NDYiLz4KPHBhdGggZD0iTTEwOCAxMkg5NlYzNkg5MFY2SDEwOFYxMlpNMTE0IDM2SDEwOFYxMkgxMTRWMzZaIiBmaWxsPSIjQjdCMUIxIi8+CjxwYXRoIGQ9Ik0xNDQgMzBIMTI2VjE4SDE0NFYzMFoiIGZpbGw9IiM0QjQ2NDYiLz4KPHBhdGggZD0iTTE0NCAxMkgxMjZWMzBIMTQ0VjM2SDEyMFY2SDE0NFYxMloiIGZpbGw9IiNGMUVDRUMiLz4KPHBhdGggZD0iTTE2OCAzMEgxNTZWMThIMTY4VjMwWiIgZmlsbD0iIzRCNDY0NiIvPgo8cGF0aCBkPSJNMTY4IDEySDE1NlYzMEgxNjhWMTJaTTE3NCAzNkgxNTBWNkgxNzRWMzZaIiBmaWxsPSIjRjFFQ0VDIi8+CjxwYXRoIGQ9Ik0xOTggMzBIMTg2VjE4SDE5OFYzMFoiIGZpbGw9IiM0QjQ2NDYiLz4KPHBhdGggZD0iTTE5OCAxMkgxODZWMzBIMTk4VjEyWk0yMDQgMzZIMTgwVjZIMTk4VjBIMjA0VjM2WiIgZmlsbD0iI0YxRUNFQyIvPgo8cGF0aCBkPSJNMjM0IDI0VjMwSDIxNlYyNEgyMzRaIiBmaWxsPSIjNEI0NjQ2Ii8+CjxwYXRoIGQ9Ik0yMTYgMTJWMThIMjI4VjEySDIxNlpNMjM0IDI0SDIxNlYzMEgyMzRWMzZIMjEwVjZIMjM0VjI0WiIgZmlsbD0iI0YxRUNFQyIvPgo8L3N2Zz4K" alt="OpenCode"></div>
+      <div class="sticker light" style="left:37%;top:46%;width:180px;transform:rotate(-6deg);padding-bottom:34px"><img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4MDAgODAwIj4KICA8c3R5bGU+CiAgICAubG9nby1tYXJrIHsgZmlsbDogIzAwMDsgfQogICAgCiAgPC9zdHlsZT4KICA8IS0tIFAgc2hhcGU6IG91dGVyIGJvdW5kYXJ5IGNsb2Nrd2lzZSwgaW5uZXIgaG9sZSBjb3VudGVyLWNsb2Nrd2lzZSAtLT4KICA8cGF0aCBjbGFzcz0ibG9nby1tYXJrIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGQ9IgogICAgTTE2NS4yOSAxNjUuMjkKICAgIEg1MTcuMzYKICAgIFY0MDAKICAgIEg0MDAKICAgIFY1MTcuMzYKICAgIEgyODIuNjUKICAgIFY2MzQuNzIKICAgIEgxNjUuMjkKICAgIFoKICAgIE0yODIuNjUgMjgyLjY1CiAgICBWNDAwCiAgICBINDAwCiAgICBWMjgyLjY1CiAgICBaCiAgIi8+CiAgPCEtLSBpIGRvdCAtLT4KICA8cGF0aCBjbGFzcz0ibG9nby1tYXJrIiBkPSJNNTE3LjM2IDQwMCBINjM0LjcyIFY2MzQuNzIgSDUxNy4zNiBaIi8+Cjwvc3ZnPgo=" alt="Pi"><span class="cap">Pi</span></div>
+      <div class="sticker dark" style="left:58%;top:66%;width:430px;transform:rotate(5deg)"><img src="data:image/png;base64,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" alt="Hermes"></div>
+    </div>
+  </section>
+
+  <!-- ============ 5 · WHAT IS A CODING HARNESS (definition from README.md) ============ -->
+  <section class="slide s-claim">
+    <div class="eyebrow">What is a coding harness?</div>
+    <blockquote>The harness is the program around the model.</blockquote>
+    <div class="claimsub">It sends the conversation to the model, runs the tools that the model asks for, and sends the results back.</div>
+    <div class="inpractice"><span>In practice:</span> a system prompt, tools, and a loop</div>
+    <div class="promise">In the next 30 minutes, you look inside a harness of <b>98 lines</b>. After that, you extend it.<br>Learning from first principles removes the magic that these tools seem to have.</div>
+  </section>
+
+  <!-- ============ 6 · HOW WE GOT HERE ============
+       Fragments: the two 2025 eras reveal on → (Feb 2025, then autumn 2025), the punch line last. -->
+  <section class="slide">
+    <div class="eyebrow">How we got here</div>
+    <h2>Four years from autocomplete to agents</h2>
+    <div class="timeline">
+      <div class="era">
+        <div class="eyr">2021</div>
+        <div class="ettl">Autocomplete</div>
+        <div class="edesc">GitHub Copilot technical preview, built on OpenAI Codex. It predicts the next line from the open file and nothing else.</div>
+        <div class="ecap">sees one file · suggests</div>
+      </div>
+      <div class="era">
+        <div class="eyr">2022–23</div>
+        <div class="ettl">Copy-paste chat</div>
+        <div class="edesc">ChatGPT, then GPT-4 and function calling. You paste code and errors in, and carry answers back by hand. SWE-bench 2023: the best model fixed 2% of real GitHub issues.</div>
+        <div class="ecap">sees what you paste · you are the loop</div>
+      </div>
+      <div class="era">
+        <div class="eyr">2024</div>
+        <div class="ettl">Context and reasoning</div>
+        <div class="edesc">Cursor and IDE chat pull the repo in. Devin and SWE-agent show an agent with a shell. o1 learns to think before it answers.</div>
+        <div class="ecap">sees the repo · still cannot act</div>
+      </div>
+      <div class="era now frag" data-f="1">
+        <div class="eyr">Feb 2025</div>
+        <div class="ettl">The loop closes</div>
+        <div class="edesc">Claude Code research preview with Claude 3.7 Sonnet. Copilot agent mode the same month. A terminal agent that reads, edits, runs the tests, and commits.</div>
+        <div class="ecap">read · edit · bash · repeat</div>
+      </div>
+      <div class="era now frag" data-f="2">
+        <div class="eyr">Autumn 2025 →</div>
+        <div class="ettl">It actually works</div>
+        <div class="edesc">Sonnet 4.5, Opus 4.5, GPT-5-Codex. Today: Fable 5.2, GPT-6.2 Astra, Gemini 4 Neon, Kimi K3. Models trained inside the loop, not just prompted into it. Tasks that take hours, checked by running the code.</div>
+        <div class="ecap">runs it · reads the error · fixes it</div>
+      </div>
+    </div>
+    <div class="punch frag" data-f="3">Each step hands the model one more job: see the file, see the repo, act on it, check its own work. The last two steps are a loop around a model call. That loop is this presentation.</div>
+  </section>
+
+  <!-- ============ 7 · COMPOSITION ============ -->
+  <section class="slide">
+    <div class="eyebrow">Composition</div>
+    <h2>A harness is three parts around a model</h2>
+    <div class="compose">
+      <div class="part p0"><div class="pnum">+</div><div class="pname">The model</div><div class="pdesc">The part that you do not control. It is trained to work as a coding agent. The harness reaches it with one stateless HTTP call to a <b>provider</b>. The next slide shows that call.</div></div>
+      <div class="part p1"><div class="pnum">1</div><div class="pname">The system prompt</div><div class="pdesc">Tells the model where it is, what it can do, and how to ask for it.</div></div>
+      <div class="part p2"><div class="pnum">2</div><div class="pname">The tools</div><div class="pdesc">Capabilities that the harness offers. The model chooses a tool, and the harness runs it.</div></div>
+      <div class="part p3"><div class="pnum">3</div><div class="pname">The loop</div><div class="pdesc">Send the conversation, run the tool that the model asks for, send the result back. Repeat until a reply has no tool call.</div></div>
+    </div>
+    <div class="punch">Agent = Model + Harness. The model supplies the intelligence. The harness supplies the environment.</div>
+  </section>
+
+  <!-- ============ 8 · STATELESS HTTP ============ -->
+  <section class="slide">
+    <div class="eyebrow">The protocol · the provider, part 1</div>
+    <h2>A conversation with a model is one stateless HTTP call</h2>
+    <div class="cols">
+      <div class="col">
+        <div class="collabel">Request · POST /v1/chat/completions</div>
+        <div class="code">{
+  <span class="c-key">"model"</span>: <span class="c-str">"deepseek/deepseek-v4-flash"</span>,
+  <span class="c-key">"messages"</span>: [
+    { <span class="c-key">"role"</span>: <span class="c-str">"system"</span>,
+      <span class="c-key">"content"</span>: <span class="c-str">"You are a helpful assistant."</span> },
+    { <span class="c-key">"role"</span>: <span class="c-str">"user"</span>,
+      <span class="c-key">"content"</span>: <span class="c-str">"Hello"</span> }
+  ]
+}</div>
+      </div>
+      <div class="col">
+        <div class="collabel">Response</div>
+        <div class="code">{
+  <span class="c-key">"choices"</span>: [ {
+    <span class="c-key">"message"</span>: {
+      <span class="c-key">"role"</span>: <span class="c-str">"assistant"</span>,
+      <span class="c-key">"content"</span>: <span class="c-str">"Hi! How can I help?"</span>
+    }
+  } ]
+}</div>
+      </div>
+    </div>
+    <div class="punch">The API keeps no state. The harness sends the full conversation on each request.</div>
+  </section>
+
+  <!-- ============ 9 · THE PROVIDER CALL (loop.ts, verbatim) ============ -->
+  <section class="slide">
+    <div class="eyebrow">The protocol · the provider, part 2</div>
+    <h2>The whole provider is one function <span class="h2aside">sendMessages()</span></h2>
+    <div class="code" style="font-size:14px;line-height:1.55"><span class="c-kw">async</span> <span class="c-kw">function</span> <span class="c-fn">sendMessages</span>(conversation: Message[]) {
+  <span class="c-kw">const</span> response = <span class="c-kw">await</span> <span class="c-fn">fetch</span>(<span class="c-str">"https://openrouter.ai/api/v1/chat/completions"</span>, {
+    method: <span class="c-str">"POST"</span>,
+    headers: {
+      <span class="c-str">"Authorization"</span>: <span class="c-str">`Bearer ${process.env["OPENROUTER_API_KEY"]!}`</span>,
+      <span class="c-str">"Content-Type"</span>: <span class="c-str">"application/json"</span>,
+    },
+    body: JSON.<span class="c-fn">stringify</span>({
+      model: <span class="c-str">"deepseek/deepseek-v4-flash"</span>,
+      max_tokens: 4000,
+      messages: conversation,
+    }),
+  });
+  <span class="c-kw">const</span> data = <span class="c-kw">await</span> response.<span class="c-fn">json</span>()
+  <span class="c-kw">return</span> data.choices[0].message.content;
+}</div>
+    <div class="punch">This is the request from the previous slide in a function: one fetch, one bearer token, one JSON body.</div>
+  </section>
+
+  <!-- ============ 10 · SYSTEM PROMPT ANATOMY ============
+       Left column: systemPrompt from loop.ts. The tool lines are shortened with "…", the rest is verbatim. -->
+  <section class="slide">
+    <div class="eyebrow">Building block 1 · The system prompt</div>
+    <h2>Anatomy of a system prompt</h2>
+    <div class="cols">
+      <div class="col" style="flex:1.3">
+        <div class="collabel">This harness: the whole prompt, about 130 words</div>
+        <div class="anat">
+          <div class="anat-row"><div class="anat-label" style="color:var(--pink)">identity</div><div class="anat-body" style="border-left-color:var(--pink)">You are a coding assistant operating inside a coding agent harness. Help users inspect files, run commands, and modify code.</div></div>
+          <div class="anat-row"><div class="anat-label" style="color:var(--green)">tool docs</div><div class="anat-body" style="border-left-color:var(--green)">&lt;tools&gt;
+- read: Read a file's contents. Arguments: { "path": string }.
+- write: Create or overwrite a file. …
+- edit: Replace exact text in a file. …
+- bash: Run a shell command. …</div></div>
+          <div class="anat-row"><div class="anat-label" style="color:var(--orange)">format of a tool call</div><div class="anat-body" style="border-left-color:var(--orange)">When you want to use a tool, reply with exactly one line in the format:
+tool: NAME({"arg": "value"})</div></div>
+          <div class="anat-row"><div class="anat-label" style="color:var(--cyan)">guidelines</div><div class="anat-body" style="border-left-color:var(--cyan)">Use compact single-line JSON with double quotes. After you receive a tool_result(...) message, continue the task. If no tool is needed, just respond normally with your answer.
+&lt;/tools&gt;</div></div>
+          <div class="anat-row"><div class="anat-label" style="color:var(--muted)">environment</div><div class="anat-body" style="border-left-color:var(--muted)">&lt;cwd&gt;
+/home/you/tech-evo-ai-masterclass
+&lt;/cwd&gt;</div></div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="collabel">In production (Claude Code): the same skeleton, three layers</div>
+        <div class="prodstack">
+          <div class="prodcard" style="border-left-color:var(--pink)">
+            <div class="ph1">System prompt <small>the system field</small></div>
+            <div class="pitems">identity and safety · harness mechanics · task guidelines · tone · memory · environment</div>
+          </div>
+          <div class="prodcard" style="border-left-color:var(--green)">
+            <div class="ph1">Tool definitions <small>the tools field</small></div>
+            <div class="pitems">About 10 tools, each with prose and a JSON Schema. More than half of the total size. MCP servers land here too.</div>
+          </div>
+          <div class="prodcard" style="border-left-color:var(--cyan)">
+            <div class="ph1">First user message <small>&lt;system-reminder&gt; blocks</small></div>
+            <div class="pitems">the list of skills · project instructions (CLAUDE.md) · the date. These are not in the system prompt at all.</div>
+          </div>
+        </div>
+        <div class="sidenote">Pi builds its prompt from tagged sections in the same way. The starter uses <span class="mono">&lt;tools&gt;</span> and <span class="mono">&lt;cwd&gt;</span>.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 11 · PROMPTS IN THE WILD ============
+       Word counts (wc -w), one scale: about 106.5 words for each 1% of the track.
+       This harness 130 (cwd excluded) · OpenCode system.txt 152 · Codex prompt.md 3,390: measured 2026-11-26.
+       Pi about 280: assembled from system-prompt.ts on 2026-11-02. Copilot CLI 1.0.76: from a session log, 2026-11-25.
+       Claude Code: cchistory dump of v2.1.112 (4,059 + 5,630 + 530 = 10,227 with the 8-word file header). -->
+  <section class="slide">
+    <div class="eyebrow">Building block 1 · The system prompt</div>
+    <h2>System prompts in the wild <span class="h2aside">words that the harness sends before you type</span></h2>
+    <div class="chart">
+      <div class="crow">
+        <div class="cname">This harness</div>
+        <div class="ctrack"><div class="cbar" style="width:1.2%"></div><div class="cval" style="left:1.2%">~130</div></div>
+      </div>
+      <div class="crow">
+        <div class="cname">OpenCode <small>base prompt</small></div>
+        <div class="ctrack"><div class="cbar" style="width:1.4%"></div><div class="cval" style="left:1.4%">~150</div></div>
+      </div>
+      <div class="crow">
+        <div class="cname">Pi</div>
+        <div class="ctrack"><div class="cbar" style="width:2.6%"></div><div class="cval" style="left:2.6%">~280</div></div>
+      </div>
+      <div class="crow">
+        <div class="cname">Codex <small>base prompt</small></div>
+        <div class="ctrack"><div class="cbar" style="width:31.8%"></div><div class="cval" style="left:31.8%">~3,400</div></div>
+      </div>
+      <div class="crow">
+        <div class="cname">GitHub Copilot CLI <small>v1.0.76 · system message</small></div>
+        <div class="ctrack"><div class="cbar" style="width:56.3%"></div><div class="cval" style="left:56.3%">more than 6,000</div></div>
+      </div>
+      <div class="crow">
+        <div class="cname">Claude Code <small>v2.1.112 · April 2026</small></div>
+        <div class="ctrack">
+          <div class="cbar" style="width:38.1%;background:var(--pink);border-radius:0"></div>
+          <div class="cbar" style="left:38.1%;width:52.9%;background:var(--green);border-radius:0"></div>
+          <div class="cbar" style="left:91%;width:5%;background:var(--cyan)"></div>
+          <div class="cval in" style="left:0">4,059</div>
+          <div class="cval in" style="left:38.1%">5,630</div>
+          <div class="cval in" style="left:91%;padding-left:6px">530</div>
+        </div>
+      </div>
+      <div class="clegend">
+        <span><i style="background:var(--pink)"></i>system prompt</span>
+        <span><i style="background:var(--green)"></i>tool definitions</span>
+        <span><i style="background:var(--cyan)"></i>first user message</span>
+        <span>10,227 words in total</span>
+      </div>
+    </div>
+    <div class="punch">The same skeleton, from about 130 words to more than 10,000. <span class="aside">Word counts from November 2026. See breakout topic 4.</span></div>
+  </section>
+
+  <!-- ============ 12 · THE TOOLS (loop.ts, verbatim) ============ -->
+  <section class="slide">
+    <div class="eyebrow">Building block 2 · The tools</div>
+    <h2>The tools <span class="h2aside">the least that a coding harness needs, with their implementations</span></h2>
+    <div class="code" style="font-size:13.5px;line-height:1.5;padding:9px 14px;margin-bottom:12px"><span class="c-kw">const</span> tools: <span class="c-kw">Record</span>&lt;<span class="c-kw">string</span>, (input: <span class="c-kw">any</span>) =&gt; <span class="c-kw">Promise</span>&lt;<span class="c-kw">string</span>&gt;&gt; = {</div>
+    <div class="toolgrid">
+      <div class="toolcard">
+        <div class="th"><div class="tn">read</div><div class="tr">read the contents of a file</div></div>
+        <div class="code"><span class="c-key">read</span>: ({ path }) =&gt; <span class="c-fn">readFile</span>(path, <span class="c-str">"utf8"</span>),</div>
+      </div>
+      <div class="toolcard">
+        <div class="th"><div class="tn">write</div><div class="tr">create or overwrite a file</div></div>
+        <div class="code"><span class="c-key">write</span>: <span class="c-kw">async</span> ({ path, content }) =&gt; {
+  <span class="c-kw">await</span> <span class="c-fn">mkdir</span>(<span class="c-fn">dirname</span>(path), { recursive: <span class="c-kw">true</span> });
+  <span class="c-kw">await</span> <span class="c-fn">writeFile</span>(path, content, <span class="c-str">"utf8"</span>);
+  <span class="c-kw">return</span> <span class="c-str">`write: wrote ${content.length} bytes to ${path}`</span>;
+},</div>
+      </div>
+      <div class="toolcard">
+        <div class="th"><div class="tn">edit</div><div class="tr">replace exact text in a file</div></div>
+        <div class="code"><span class="c-key">edit</span>: <span class="c-kw">async</span> ({ path, oldText, newText }) =&gt; {
+  <span class="c-kw">const</span> content = <span class="c-kw">await</span> <span class="c-fn">readFile</span>(path, <span class="c-str">"utf8"</span>);
+  <span class="c-kw">await</span> <span class="c-fn">writeFile</span>(path, content.<span class="c-fn">replace</span>(oldText, newText), <span class="c-str">"utf8"</span>);
+  <span class="c-kw">return</span> <span class="c-str">`edit: updated ${path}`</span>;
+},</div>
+      </div>
+      <div class="toolcard">
+        <div class="th"><div class="tn">bash</div><div class="tr">run a shell command</div></div>
+        <div class="code"><span class="c-key">bash</span>: ({ command }) =&gt; <span class="c-kw">new</span> <span class="c-kw">Promise</span>((resolve) =&gt; {
+  <span class="c-fn">exec</span>(command, (_error, stdout, stderr) =&gt; {
+    <span class="c-fn">resolve</span>(<span class="c-str">`${stdout}${stderr}`</span>.<span class="c-fn">trim</span>() || <span class="c-str">"(no output)"</span>);
+  });
+}),</div>
+      </div>
+    </div>
+    <div class="punch">A tool is a function from arguments to text. <span class="aside">With <span class="mono">bash</span>, the agent can change every file that your user account can change.</span></div>
+  </section>
+
+  <!-- ============ 13 · A TOOL CALL IS ONE LINE OF TEXT (extractToolCall from loop.ts, verbatim) ============
+       The two messages are from the real session on slide 15. -->
+  <section class="slide">
+    <div class="eyebrow">Building block 2 · The tools</div>
+    <h2>A tool call is one line of text</h2>
+    <div class="cols">
+      <div class="col" style="gap:10px">
+        <div class="collabel"><span class="stepno">1</span>The system prompt describes the format</div>
+        <div class="code wrap" style="font-size:12.5px;line-height:1.5;padding:10px 14px">When you want to use a tool, reply with exactly one line in the format:
+tool: NAME({"arg": "value"})</div>
+        <div class="collabel" style="margin-top:14px"><span class="stepno">2</span>The model writes that line</div>
+        <div class="msg m-assistant"><span class="mrole">assistant</span><span class="mtext">tool: bash({"command": "find . -name '*.ts' | wc -l"})</span></div>
+        <div class="collabel" style="margin-top:14px"><span class="stepno">4</span>The result goes back as a user message</div>
+        <div class="msg m-tool"><span class="mrole">user</span><span class="mtext">tool_result("1425")</span></div>
+      </div>
+      <div class="col" style="flex:1.35;gap:10px">
+        <div class="collabel"><span class="stepno">3</span>The harness finds the line and runs the tool</div>
+        <div class="code" style="font-size:12.5px;line-height:1.75;padding:14px 16px"><span class="c-kw">function</span> <span class="c-fn">extractToolCall</span>(text: <span class="c-kw">string</span>): (() =&gt; <span class="c-kw">Promise</span>&lt;<span class="c-kw">string</span>&gt;) | <span class="c-kw">null</span> {
+  <span class="c-kw">for</span> (<span class="c-kw">const</span> line <span class="c-kw">of</span> text.<span class="c-fn">split</span>(<span class="c-str">"\n"</span>)) {
+    <span class="c-kw">const</span> match = line.<span class="c-fn">trim</span>().<span class="c-fn">match</span>(<span class="c-str">/^tool:\s*(\w+)\((.*)\)$/</span>);
+    <span class="c-kw">if</span> (!match) <span class="c-kw">continue</span>;
+    <span class="c-kw">const</span> tool = tools[match[1]!]!;
+    <span class="c-kw">const</span> input = JSON.<span class="c-fn">parse</span>(match[2]!);
+    <span class="c-kw">return</span> <span class="c-kw">async</span> () =&gt; <span class="c-str">`tool_result(${JSON.stringify(await tool(input))})`</span>;
+  }
+  <span class="c-kw">return</span> <span class="c-kw">null</span>;
+}</div>
+      </div>
+    </div>
+    <div class="punch">The model only writes text. The harness runs the tools. <span class="aside">This format is our own. Most APIs have a native one: breakout topic 1.</span></div>
+  </section>
+
+  <!-- ============ 14 · THE LOOP (loop.ts, verbatim) ============ -->
+  <section class="slide">
+    <div class="eyebrow">Building block 3 · The loop</div>
+    <h2>The loop</h2>
+    <div class="code" style="font-size:15px;line-height:1.58"><span class="c-kw">const</span> conversation: Message[] = [{ role: <span class="c-str">"system"</span>, content: systemPrompt }];
+
+<span class="c-kw">async</span> <span class="c-kw">function</span> <span class="c-fn">runLoop</span>(prompt: <span class="c-kw">string</span>): <span class="c-kw">Promise</span>&lt;<span class="c-kw">void</span>&gt; {
+  conversation.<span class="c-fn">push</span>({ role: <span class="c-str">"user"</span>, content: prompt });
+  <span class="c-kw">while</span> (<span class="c-kw">true</span>) {
+    <span class="c-kw">const</span> reply = <span class="c-kw">await</span> <span class="c-fn">sendMessages</span>(conversation);
+    conversation.<span class="c-fn">push</span>({ role: <span class="c-str">"assistant"</span>, content: reply });
+    console.<span class="c-fn">log</span>(reply)
+
+    <span class="c-kw">const</span> toolCall = <span class="c-fn">extractToolCall</span>(reply);
+    <span class="hl"><span class="c-kw">if</span> (toolCall === <span class="c-kw">null</span>) <span class="c-kw">break</span>;</span>
+
+    <span class="c-kw">const</span> output = <span class="c-kw">await</span> <span class="c-fn">toolCall</span>();
+    conversation.<span class="c-fn">push</span>({ role: <span class="c-str">"user"</span>, content: output });
+  }
+}</div>
+    <div class="punch">The loop stops when a reply has no tool call. The model decides when it is done.</div>
+  </section>
+
+  <!-- ============ 15 · THE LOOP, STEP BY STEP ============
+       The transcript is a real session, verbatim, captured in August 2026 with claude-opus-4-8 and an earlier
+       version of this harness. That version had a longer system prompt, and the same loop and tool format.
+       Fragments 1 to 6 reveal the messages, fragment 7 the exit. data-hl on the code lines uses the same numbers. -->
+  <section class="slide">
+    <div class="eyebrow">Building block 3 · The loop</div>
+    <h2 style="margin-bottom:16px">The loop, step by step <span class="h2aside">a real session, verbatim</span></h2>
+    <div class="cols">
+      <div class="col" style="gap:12px">
+        <div class="code" style="font-size:12.5px;line-height:1.6;padding:14px 22px"><span class="ln" data-hl="0"><span class="c-kw">const</span> conversation = [{ role: <span class="c-str">"system"</span>, … }];</span><span class="ln"> </span><span class="ln"><span class="c-kw">async</span> <span class="c-kw">function</span> <span class="c-fn">runLoop</span>(prompt: <span class="c-kw">string</span>): <span class="c-kw">Promise</span>&lt;<span class="c-kw">void</span>&gt; {</span><span class="ln" data-hl="1">  conversation.<span class="c-fn">push</span>({ role: <span class="c-str">"user"</span>, content: prompt });</span><span class="ln">  <span class="c-kw">while</span> (<span class="c-kw">true</span>) {</span><span class="ln" data-hl="2 4 6">    <span class="c-kw">const</span> reply = <span class="c-kw">await</span> <span class="c-fn">sendMessages</span>(conversation);</span><span class="ln" data-hl="2 4 6">    conversation.<span class="c-fn">push</span>({ role: <span class="c-str">"assistant"</span>, content: reply });</span><span class="ln" data-hl="2 4 6">    console.<span class="c-fn">log</span>(reply)</span><span class="ln"> </span><span class="ln" data-hl="3 5 7">    <span class="c-kw">const</span> toolCall = <span class="c-fn">extractToolCall</span>(reply);</span><span class="ln" data-hl="7">    <span class="c-kw">if</span> (toolCall === <span class="c-kw">null</span>) <span class="c-kw">break</span>;</span><span class="ln"> </span><span class="ln" data-hl="3 5">    <span class="c-kw">const</span> output = <span class="c-kw">await</span> <span class="c-fn">toolCall</span>();</span><span class="ln" data-hl="3 5">    conversation.<span class="c-fn">push</span>({ role: <span class="c-str">"user"</span>, content: output });</span><span class="ln">  }</span><span class="ln">}</span></div>
+        <div class="capnote">Seven messages, two tool calls, and one correction that the model made on its own. Nothing is edited. Only the system prompt is cut to fit.</div>
+        <div class="exitbadge frag" data-f="7">The last reply has no tool: line. extractToolCall() returns null, and the loop stops. The model decided that it was done.</div>
+      </div>
+      <div class="col" style="flex:1.15">
+        <div class="convo">
+          <div class="msg m-system"><span class="mrole">system</span><span class="mtext">You are an expert coding assistant operating inside a coding agent harness. …</span></div>
+          <div class="msg m-user frag" data-f="1"><span class="mrole">user</span><span class="mtext">How many .ts files are in this directory?</span></div>
+          <div class="msg m-assistant frag" data-f="2"><span class="mrole">assistant</span><span class="mtext">tool: bash({"command": "find . -name '*.ts' | wc -l"})</span></div>
+          <div class="msg m-tool frag" data-f="3"><span class="mrole">user</span><span class="mtext">tool_result("1425")</span></div>
+          <div class="msg m-assistant frag" data-f="4"><span class="mrole">assistant</span><span class="mtext">There are **1425** `.ts` files, but that likely includes `node_modules`. Let me check excluding it:
+
+tool: bash({"command": "find . -name '*.ts' -not -path '*/node_modules/*' | wc -l"})</span></div>
+          <div class="msg m-tool frag" data-f="5"><span class="mrole">user</span><span class="mtext">tool_result("15")</span></div>
+          <div class="msg m-assistant frag" data-f="6"><span class="mrole">assistant</span><span class="mtext">Excluding `node_modules`, there are **15** `.ts` files in this directory.
+
+(Including `node_modules`, the total is 1425.)</span></div>
+        </div>
+        <div class="capnote" style="margin-top:auto;font-size:11.5px">Captured in August 2026 with claude-opus-4-8 and an earlier version of this harness. The loop and the text format are the same.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 16 · THE CONTEXT WINDOW ============ -->
+  <section class="slide">
+    <div class="eyebrow">Context</div>
+    <h2>The context window <span class="h2aside">all that the model sees on one request</span></h2>
+    <div class="growth">
+      <div class="turncol">
+        <div class="blk b-usr">user</div>
+        <div class="blk b-sys">system prompt + tool docs</div>
+        <div class="tlabel">request 1</div>
+      </div>
+      <div class="turncol">
+        <div class="blk b-res">user: tool_result</div>
+        <div class="blk b-ast">assistant: tool call</div>
+        <div class="blk b-usr">user</div>
+        <div class="blk b-sys">system prompt + tool docs</div>
+        <div class="tlabel">request 2</div>
+      </div>
+      <div class="turncol">
+        <div class="blk b-res">user: tool_result</div>
+        <div class="blk b-ast">assistant: tool call</div>
+        <div class="blk b-res">user: tool_result</div>
+        <div class="blk b-ast">assistant: tool call</div>
+        <div class="blk b-usr">user</div>
+        <div class="blk b-sys">system prompt + tool docs</div>
+        <div class="tlabel">request 3</div>
+      </div>
+      <div class="turncol">
+        <div class="blk b-usr">user (next prompt)</div>
+        <div class="blk b-ast">assistant: answer</div>
+        <div class="blk b-res">user: tool_result</div>
+        <div class="blk b-ast">assistant: tool call</div>
+        <div class="blk b-res">user: tool_result</div>
+        <div class="blk b-ast">assistant: tool call</div>
+        <div class="blk b-usr">user</div>
+        <div class="blk b-sys">system prompt + tool docs</div>
+        <div class="tlabel">request 4</div>
+      </div>
+    </div>
+    <div class="conseq">
+      <div><b>Long sessions are slower and cost more</b>Each request sends everything before it again. Prompt caching makes the repeat cheaper, not free.</div>
+      <div><b>The agent forgets after compaction</b>When the window is full, the harness replaces the history with a summary. Details that the summary drops are gone.</div>
+      <div><b>A new session helps</b>A new conversation holds only what this task needs. Less noise, fewer tokens, better answers.</div>
+    </div>
+    <div class="punch" style="margin-top:16px">The conversation is the memory of the agent. It grows with each request, until compaction replaces it with a summary.</div>
+  </section>
+
+  <!-- ============ 17 · FULL SOURCE ============
+       Generated verbatim from coding-harness/src/loop.ts (98 lines) on 2026-11-26.
+       If loop.ts changes, regenerate this block: escape & < >, then wrap strings, keywords and calls
+       in c-str, c-kw and c-fn spans. -->
+  <section class="slide" style="padding:44px 60px 40px">
+    <div class="eyebrow" style="margin-bottom:8px">The whole thing · coding-harness/src/loop.ts</div>
+    <h2 style="font-size:30px;margin-bottom:12px">loop.ts: 98 lines, the entire agent <span class="h2aside" style="font-size:17px">provider, tools, system prompt, loop, REPL</span></h2>
+    <div class="code src"><span class="c-kw">import</span> { exec } <span class="c-kw">from</span> <span class="c-str">"node:child_process"</span>;
+<span class="c-kw">import</span> { mkdir, readFile, writeFile } <span class="c-kw">from</span> <span class="c-str">"node:fs/promises"</span>;
+<span class="c-kw">import</span> { dirname } <span class="c-kw">from</span> <span class="c-str">"node:path"</span>;
+
+<span class="c-kw">interface</span> Message {
+  role: <span class="c-str">"system"</span> | <span class="c-str">"user"</span> | <span class="c-str">"assistant"</span>;
+  content: <span class="c-kw">string</span>;
+}
+
+<span class="c-kw">async</span> <span class="c-kw">function</span> <span class="c-fn">sendMessages</span>(conversation: Message[]) {
+  <span class="c-kw">const</span> response = <span class="c-kw">await</span> <span class="c-fn">fetch</span>(<span class="c-str">"https://openrouter.ai/api/v1/chat/completions"</span>, {
+    method: <span class="c-str">"POST"</span>,
+    headers: {
+      <span class="c-str">"Authorization"</span>: <span class="c-str">`Bearer ${process.env["OPENROUTER_API_KEY"]!}`</span>,
+      <span class="c-str">"Content-Type"</span>: <span class="c-str">"application/json"</span>,
+    },
+    body: JSON.<span class="c-fn">stringify</span>({
+      model: <span class="c-str">"deepseek/deepseek-v4-flash"</span>,
+      max_tokens: 4000,
+      messages: conversation,
+    }),
+  });
+  <span class="c-kw">const</span> data = <span class="c-kw">await</span> response.<span class="c-fn">json</span>()
+  <span class="c-kw">return</span> data.choices[0].message.content;
+}
+
+<span class="c-kw">const</span> tools: <span class="c-kw">Record</span>&lt;<span class="c-kw">string</span>, (input: <span class="c-kw">any</span>) =&gt; <span class="c-kw">Promise</span>&lt;<span class="c-kw">string</span>&gt;&gt; = {
+  read: ({ path }) =&gt; <span class="c-fn">readFile</span>(path, <span class="c-str">"utf8"</span>),
+  write: <span class="c-kw">async</span> ({ path, content }) =&gt; {
+    <span class="c-kw">await</span> <span class="c-fn">mkdir</span>(<span class="c-fn">dirname</span>(path), { recursive: <span class="c-kw">true</span> });
+    <span class="c-kw">await</span> <span class="c-fn">writeFile</span>(path, content, <span class="c-str">"utf8"</span>);
+    <span class="c-kw">return</span> <span class="c-str">`write: wrote ${content.length} bytes to ${path}`</span>;
+  },
+  edit: <span class="c-kw">async</span> ({ path, oldText, newText }) =&gt; {
+    <span class="c-kw">const</span> content = <span class="c-kw">await</span> <span class="c-fn">readFile</span>(path, <span class="c-str">"utf8"</span>);
+    <span class="c-kw">await</span> <span class="c-fn">writeFile</span>(path, content.<span class="c-fn">replace</span>(oldText, newText), <span class="c-str">"utf8"</span>);
+    <span class="c-kw">return</span> <span class="c-str">`edit: updated ${path}`</span>;
+  },
+  bash: ({ command }) =&gt; <span class="c-kw">new</span> <span class="c-kw">Promise</span>((resolve) =&gt; {
+    <span class="c-fn">exec</span>(command, (_error, stdout, stderr) =&gt; {
+      <span class="c-fn">resolve</span>(<span class="c-str">`${stdout}${stderr}`</span>.<span class="c-fn">trim</span>() || <span class="c-str">"(no output)"</span>);
+    });
+  }),
+};
+
+<span class="c-kw">function</span> <span class="c-fn">extractToolCall</span>(text: <span class="c-kw">string</span>): (() =&gt; <span class="c-kw">Promise</span>&lt;<span class="c-kw">string</span>&gt;) | <span class="c-kw">null</span> {
+  <span class="c-kw">for</span> (<span class="c-kw">const</span> line <span class="c-kw">of</span> text.<span class="c-fn">split</span>(<span class="c-str">"\n"</span>)) {
+    <span class="c-kw">const</span> match = line.<span class="c-fn">trim</span>().<span class="c-fn">match</span>(<span class="c-str">/^tool:\s*(\w+)\((.*)\)$/</span>);
+    <span class="c-kw">if</span> (!match) <span class="c-kw">continue</span>;
+    <span class="c-kw">const</span> tool = tools[match[1]!]!;
+    <span class="c-kw">const</span> input = JSON.<span class="c-fn">parse</span>(match[2]!);
+    <span class="c-kw">return</span> <span class="c-kw">async</span> () =&gt; <span class="c-str">`tool_result(${JSON.stringify(await tool(input))})`</span>;
+  }
+  <span class="c-kw">return</span> <span class="c-kw">null</span>;
+}
+
+<span class="c-kw">const</span> systemPrompt = <span class="c-str">`You are a coding assistant operating inside a coding agent harness. Help users inspect files, run commands, and modify code.
+&lt;tools&gt;
+- read: Read a file's contents. Arguments: { "path": string }.
+- write: Create or overwrite a file. Arguments: { "path": string, "content": string }.
+- edit: Replace exact text in a file. oldText must appear exactly once. Arguments: { "path": string, "oldText": string, "newText": string }.
+- bash: Run a shell command. Arguments: { "command": string, "timeout"?: number (ms) }.
+
+When you want to use a tool, reply with exactly one line in the format:
+tool: NAME({"arg": "value"})
+Use compact single-line JSON with double quotes. After you receive a tool_result(...) message, continue the task. If no tool is needed, just respond normally with your answer.
+&lt;/tools&gt;
+
+&lt;cwd&gt;
+${process.cwd().replace(/\\/g, "/")}
+&lt;/cwd&gt;
+`</span>;
+
+<span class="c-kw">const</span> conversation: Message[] = [{ role: <span class="c-str">"system"</span>, content: systemPrompt }];
+
+<span class="c-kw">async</span> <span class="c-kw">function</span> <span class="c-fn">runLoop</span>(prompt: <span class="c-kw">string</span>): <span class="c-kw">Promise</span>&lt;<span class="c-kw">void</span>&gt; {
+  conversation.<span class="c-fn">push</span>({ role: <span class="c-str">"user"</span>, content: prompt });
+  <span class="c-kw">while</span> (<span class="c-kw">true</span>) {
+    <span class="c-kw">const</span> reply = <span class="c-kw">await</span> <span class="c-fn">sendMessages</span>(conversation);
+    conversation.<span class="c-fn">push</span>({ role: <span class="c-str">"assistant"</span>, content: reply });
+    console.<span class="c-fn">log</span>(reply)
+
+    <span class="c-kw">const</span> toolCall = <span class="c-fn">extractToolCall</span>(reply);
+    <span class="c-kw">if</span> (toolCall === <span class="c-kw">null</span>) <span class="c-kw">break</span>;
+
+    <span class="c-kw">const</span> output = <span class="c-kw">await</span> <span class="c-fn">toolCall</span>();
+    conversation.<span class="c-fn">push</span>({ role: <span class="c-str">"user"</span>, content: output });
+  }
+}
+
+process.stdin.<span class="c-fn">setEncoding</span>(<span class="c-str">"utf8"</span>);
+process.stdout.<span class="c-fn">write</span>(<span class="c-str">"&gt; "</span>);
+<span class="c-kw">for</span> <span class="c-kw">await</span> (<span class="c-kw">const</span> chunk <span class="c-kw">of</span> process.stdin <span class="c-kw">as</span> AsyncIterable&lt;<span class="c-kw">string</span>&gt;) {
+  <span class="c-kw">const</span> prompt = chunk.<span class="c-fn">trim</span>();
+  <span class="c-kw">if</span> (prompt) <span class="c-kw">await</span> <span class="c-fn">runLoop</span>(prompt);
+  process.stdout.<span class="c-fn">write</span>(<span class="c-str">"&gt; "</span>);
+}
+console.<span class="c-fn">error</span>(JSON.<span class="c-fn">stringify</span>(conversation));</div>
+  </section>
+
+  <!-- ============ 18 · EVERYTHING ELSE ============
+       The tags name the breakout topics (docs/breakout-sessions.md) and the parts of the assignment (docs/lab-assignments.md). -->
+  <section class="slide">
+    <div class="eyebrow">Production harnesses</div>
+    <h2>Everything else is plumbing</h2>
+    <div class="lede">A production harness adds many features to the same skeleton. Each feature upgrades one of the four parts. You do not need any of them to build an agent.</div>
+    <div class="plumb">
+      <div class="prow k-prompt">
+        <div class="plabel">system prompt</div>
+        <div class="chips">
+          <div class="chip lab">AGENTS.md<span class="tag">topic 3 · part 3</span></div>
+          <div class="chip lab">skills<span class="tag">topic 6 · part 3</span></div>
+          <div class="chip lab">environment facts<span class="tag">topic 4 · part 3</span></div>
+          <div class="chip">/commands</div>
+          <div class="chip">memory</div>
+        </div>
+      </div>
+      <div class="prow k-tools">
+        <div class="plabel">tools</div>
+        <div class="chips">
+          <div class="chip lab">native tool calling<span class="tag">topic 1 · part 3</span></div>
+          <div class="chip lab">web search and fetch<span class="tag">topic 5 · part 3</span></div>
+          <div class="chip lab">sandboxing<span class="tag">part 3</span></div>
+          <div class="chip">MCP servers</div>
+          <div class="chip">subagents</div>
+        </div>
+      </div>
+      <div class="prow k-loop">
+        <div class="plabel">loop</div>
+        <div class="chips">
+          <div class="chip lab">session logs<span class="tag">topic 2 · part 2</span></div>
+          <div class="chip lab">errors as feedback<span class="tag">part 2</span></div>
+          <div class="chip lab">resume a session<span class="tag">part 3</span></div>
+          <div class="chip lab">guardrails<span class="tag">part 3</span></div>
+          <div class="chip lab">a better UI<span class="tag">part 3</span></div>
+          <div class="chip">compaction</div>
+          <div class="chip">plan mode</div>
+          <div class="chip">permission gates</div>
+          <div class="chip">hooks</div>
+          <div class="chip">parallel agents</div>
+        </div>
+      </div>
+      <div class="prow k-prov">
+        <div class="plabel">provider</div>
+        <div class="chips">
+          <div class="chip lab">SDKs and provider abstractions<span class="tag">topic 1 · part 3</span></div>
+          <div class="chip lab">streaming<span class="tag">part 3</span></div>
+          <div class="chip">prompt caching</div>
+        </div>
+      </div>
+    </div>
+    <div class="punch">The features with a tag are in this lab. <span class="aside">A topic is a breakout topic. A part is a part of the lab assignment.</span></div>
+  </section>
+
+  <!-- ============ 19 · BREAKOUT SESSION (docs/breakout-sessions.md) ============ -->
+  <section class="slide" id="breakout">
+    <div class="eyebrow">Breakout session · 45 minutes</div>
+    <h2 style="margin-bottom:18px">Explore one topic with a coding agent, then explain it</h2>
+    <div class="cols">
+      <div class="col" style="flex:0.92;gap:16px">
+        <ul class="talk">
+          <li>Form a group of <b>4 to 5 people</b>. Each group takes a different topic.</li>
+          <li>Choose a coding agent, for example Claude Code, Codex, or GitHub Copilot.</li>
+          <li>Work in <b>mob programming</b> style with a stable driver.</li>
+          <li>Keep notes on the prompts that you send and on what you learn.</li>
+        </ul>
+        <div class="plan">
+          <div><span>0 to 5</span>Form the group. Pick a topic and a driver.</div>
+          <div><span>5 to 25</span>Explore the topic.</div>
+          <div><span>25 to 30</span>Decide what you show and who shows it.</div>
+          <div><span>30 to 45</span>Presentations, about 5 minutes for each group.</div>
+        </div>
+      </div>
+      <div class="col" style="flex:1.2;gap:10px">
+        <div class="collabel">Each topic is a feature that the starter lacks</div>
+        <div class="menu">
+          <a href="https://github.com/caspar-forefront/tech-evo-ai-masterclass/blob/main/docs/breakout-sessions.md#1-native-tool-calling"><span class="mn">Topic 1</span><span class="mt">Native tool calling</span><span class="ms">How does an API let the model ask for a tool?</span></a>
+          <a href="https://github.com/caspar-forefront/tech-evo-ai-masterclass/blob/main/docs/breakout-sessions.md#2-session-logs"><span class="mn">Topic 2</span><span class="mt">Session logs</span><span class="ms">What does your agent save about a session?</span></a>
+          <a href="https://github.com/caspar-forefront/tech-evo-ai-masterclass/blob/main/docs/breakout-sessions.md#3-project-instructions"><span class="mn">Topic 3</span><span class="mt">Project instructions</span><span class="ms">What does your agent read before your first prompt?</span></a>
+          <a href="https://github.com/caspar-forefront/tech-evo-ai-masterclass/blob/main/docs/breakout-sessions.md#4-the-system-prompt"><span class="mn">Topic 4</span><span class="mt">The system prompt</span><span class="ms">What does a production prompt tell the model?</span></a>
+          <a class="bonus" href="https://github.com/caspar-forefront/tech-evo-ai-masterclass/blob/main/docs/breakout-sessions.md#5-web-search"><span class="mn">Bonus topic 5</span><span class="mt">Web search</span><span class="ms">Which search API is the best choice for your harness?</span></a>
+          <a class="bonus" href="https://github.com/caspar-forefront/tech-evo-ai-masterclass/blob/main/docs/breakout-sessions.md#6-skills"><span class="mn">Bonus topic 6</span><span class="mt">Skills</span><span class="ms">How does the model know that a skill exists?</span></a>
+        </div>
+      </div>
+    </div>
+    <div class="punch">Present five things: the topic, your tools, your prompts, your artifacts, and one open question.</div>
+  </section>
+
+  <!-- ============ 20 · EXPLORE WITH AN AGENT (docs/breakout-sessions.md) ============ -->
+  <section class="slide" id="explore">
+    <div class="eyebrow">Breakout session · explore with an agent</div>
+    <h2 style="margin-bottom:18px">Make the agent read, then check its sources</h2>
+    <div class="lede" style="margin-top:0;font-size:17px;max-width:none">An agent answers from one of two places: the sources that it reads now, or the memory of the model. The memory is often out of date for tools that change each month.</div>
+    <div class="compose moves">
+      <div class="part"><div class="pnum">1</div><div class="pname">Make the agent read</div><div class="pdesc">Give it the source: a file, a repository, or the URL of the docs.</div></div>
+      <div class="part"><div class="pnum">2</div><div class="pname">See where each answer comes from</div><div class="pdesc">Open the files and the pages that the agent names.</div></div>
+      <div class="part"><div class="pnum">3</div><div class="pname">Check what matters</div><div class="pdesc">Test a claim yourself before you rely on it.</div></div>
+    </div>
+    <div class="punch">Let the agent lead you to the sources. Then build your own understanding from them.</div>
+  </section>
+
+  <!-- ============ 21 · LAB ASSIGNMENT (docs/lab-assignments.md) ============ -->
+  <section class="slide" id="assignment">
+    <div class="eyebrow">Lab assignment</div>
+    <h2 style="margin-bottom:18px">Bootstrap your own harness</h2>
+    <div class="lede" style="margin-top:0">The starter is a complete coding agent, and it stops at the first tool call that fails. Turn it into a harness that you can work with.</div>
+    <div class="parts">
+      <div class="pblock">
+        <div class="amin">Part 1</div>
+        <div class="attl">Trace one turn</div>
+        <p>Follow one prompt through the starter. Find each message and its role in <span class="mono">conversation.json</span>. Count the requests to the model.</p>
+        <div class="code">node coding-harness/src/loop.ts 2&gt; conversation.json</div>
+      </div>
+      <div class="pblock min">
+        <div class="amin">Part 2 · the goal</div>
+        <div class="attl">The minimum</div>
+        <p><b>Record the session.</b> Write each message to a session log when it happens, one JSON object for each line.</p>
+        <div class="test">Test 1: Trace</div>
+        <p><b>Turn failures into feedback.</b> Catch the error and send its text to the model as the tool result.</p>
+        <div class="test">Test 2: Recover</div>
+      </div>
+      <div class="pblock">
+        <div class="amin">Part 3</div>
+        <div class="attl">Make it yours</div>
+        <p>Pick the features that interest you. Each feature has a test that tells you when it works.</p>
+        <div class="feats"><span>environment facts</span><span>AGENTS.md</span><span>OpenAI SDK</span><span>native tool calling</span><span>streaming</span><span>resume a session</span><span>guardrails</span><span>web tools</span><span>skills</span><span>a better UI</span></div>
+      </div>
+    </div>
+    <div class="punch">You reach the goal when your harness passes the two tests in Part 2. <span class="aside">Be ready to show the session log of Test 2, one feature from Part 3, and something that surprised you.</span></div>
+  </section>
+
+  <!-- ============ 22 · RESOURCES ============
+       The QR code holds https://github.com/caspar-forefront/tech-evo-ai-masterclass (qrencode, error correction M). -->
+  <section class="slide s-claim" id="end">
+    <div class="eyebrow">Tech Evolution AI Masterclass · Lab 1: The harness</div>
+    <div class="closing">
+      <div class="links">
+        <div><b>The starter</b> <span>· coding-harness/src/loop.ts, the whole agent in 98 lines</span></div>
+        <div><b>Breakout session</b> <span>· docs/breakout-sessions.md</span></div>
+        <div><b>Lab assignment</b> <span>· docs/lab-assignments.md</span></div>
+        <div><b>This deck</b> <span>· docs/presentation.html</span></div>
+        <div class="mail">caspar.nettelbladt@forefront.se</div>
+      </div>
+      <a class="qr" href="https://github.com/caspar-forefront/tech-evo-ai-masterclass" target="_blank" rel="noopener">
+        <div class="qrbox"><svg viewBox="0 0 33 33" shape-rendering="crispEdges" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="QR code to https://github.com/caspar-forefront/tech-evo-ai-masterclass"><path fill="currentColor" d="M0 0h7v1h-7zM10 0h2v1h-2zM16 0h1v1h-1zM19 0h2v1h-2zM23 0h1v1h-1zM26 0h7v1h-7zM0 1h1v1h-1zM6 1h1v1h-1zM12 1h1v1h-1zM15 1h1v1h-1zM20 1h3v1h-3zM26 1h1v1h-1zM32 1h1v1h-1zM0 2h1v1h-1zM2 2h3v1h-3zM6 2h1v1h-1zM8 2h1v1h-1zM11 2h1v1h-1zM14 2h1v1h-1zM21 2h2v1h-2zM26 2h1v1h-1zM28 2h3v1h-3zM32 2h1v1h-1zM0 3h1v1h-1zM2 3h3v1h-3zM6 3h1v1h-1zM8 3h2v1h-2zM15 3h1v1h-1zM17 3h1v1h-1zM22 3h1v1h-1zM24 3h1v1h-1zM26 3h1v1h-1zM28 3h3v1h-3zM32 3h1v1h-1zM0 4h1v1h-1zM2 4h3v1h-3zM6 4h1v1h-1zM8 4h4v1h-4zM14 4h3v1h-3zM19 4h3v1h-3zM23 4h2v1h-2zM26 4h1v1h-1zM28 4h3v1h-3zM32 4h1v1h-1zM0 5h1v1h-1zM6 5h1v1h-1zM8 5h2v1h-2zM12 5h1v1h-1zM14 5h1v1h-1zM17 5h2v1h-2zM26 5h1v1h-1zM32 5h1v1h-1zM0 6h7v1h-7zM8 6h1v1h-1zM10 6h1v1h-1zM12 6h1v1h-1zM14 6h1v1h-1zM16 6h1v1h-1zM18 6h1v1h-1zM20 6h1v1h-1zM22 6h1v1h-1zM24 6h1v1h-1zM26 6h7v1h-7zM8 7h1v1h-1zM12 7h1v1h-1zM14 7h1v1h-1zM16 7h1v1h-1zM20 7h2v1h-2zM23 7h1v1h-1zM0 8h1v1h-1zM2 8h5v1h-5zM11 8h4v1h-4zM16 8h2v1h-2zM23 8h1v1h-1zM26 8h5v1h-5zM0 9h1v1h-1zM2 9h3v1h-3zM9 9h3v1h-3zM13 9h1v1h-1zM16 9h1v1h-1zM19 9h3v1h-3zM23 9h1v1h-1zM26 9h2v1h-2zM29 9h2v1h-2zM32 9h1v1h-1zM2 10h1v1h-1zM4 10h1v1h-1zM6 10h1v1h-1zM10 10h1v1h-1zM13 10h6v1h-6zM20 10h2v1h-2zM24 10h1v1h-1zM28 10h1v1h-1zM30 10h2v1h-2zM0 11h2v1h-2zM4 11h2v1h-2zM7 11h3v1h-3zM11 11h1v1h-1zM13 11h1v1h-1zM16 11h1v1h-1zM18 11h2v1h-2zM21 11h2v1h-2zM24 11h3v1h-3zM28 11h5v1h-5zM2 12h2v1h-2zM6 12h2v1h-2zM9 12h4v1h-4zM14 12h1v1h-1zM17 12h1v1h-1zM20 12h1v1h-1zM22 12h4v1h-4zM27 12h3v1h-3zM31 12h2v1h-2zM1 13h4v1h-4zM7 13h3v1h-3zM11 13h1v1h-1zM13 13h1v1h-1zM15 13h1v1h-1zM18 13h3v1h-3zM23 13h1v1h-1zM26 13h1v1h-1zM29 13h1v1h-1zM31 13h2v1h-2zM3 14h2v1h-2zM6 14h1v1h-1zM11 14h6v1h-6zM18 14h1v1h-1zM20 14h1v1h-1zM22 14h1v1h-1zM24 14h3v1h-3zM31 14h1v1h-1zM0 15h2v1h-2zM5 15h1v1h-1zM8 15h2v1h-2zM11 15h1v1h-1zM13 15h2v1h-2zM18 15h2v1h-2zM21 15h1v1h-1zM23 15h1v1h-1zM25 15h2v1h-2zM29 15h2v1h-2zM1 16h1v1h-1zM3 16h2v1h-2zM6 16h1v1h-1zM8 16h1v1h-1zM10 16h1v1h-1zM12 16h1v1h-1zM15 16h1v1h-1zM17 16h1v1h-1zM22 16h1v1h-1zM24 16h2v1h-2zM27 16h3v1h-3zM32 16h1v1h-1zM0 17h2v1h-2zM3 17h1v1h-1zM5 17h1v1h-1zM9 17h3v1h-3zM14 17h1v1h-1zM16 17h1v1h-1zM18 17h3v1h-3zM23 17h1v1h-1zM26 17h2v1h-2zM29 17h2v1h-2zM32 17h1v1h-1zM2 18h1v1h-1zM4 18h1v1h-1zM6 18h1v1h-1zM12 18h4v1h-4zM17 18h2v1h-2zM20 18h2v1h-2zM24 18h1v1h-1zM26 18h3v1h-3zM30 18h2v1h-2zM0 19h1v1h-1zM3 19h1v1h-1zM8 19h1v1h-1zM10 19h1v1h-1zM14 19h1v1h-1zM16 19h1v1h-1zM19 19h4v1h-4zM27 19h4v1h-4zM32 19h1v1h-1zM2 20h1v1h-1zM4 20h1v1h-1zM6 20h1v1h-1zM8 20h2v1h-2zM11 20h1v1h-1zM14 20h4v1h-4zM19 20h2v1h-2zM27 20h3v1h-3zM0 21h2v1h-2zM3 21h1v1h-1zM5 21h1v1h-1zM8 21h4v1h-4zM13 21h1v1h-1zM16 21h1v1h-1zM18 21h4v1h-4zM23 21h1v1h-1zM26 21h1v1h-1zM29 21h2v1h-2zM32 21h1v1h-1zM0 22h1v1h-1zM3 22h2v1h-2zM6 22h1v1h-1zM9 22h3v1h-3zM15 22h2v1h-2zM18 22h1v1h-1zM20 22h1v1h-1zM25 22h1v1h-1zM27 22h1v1h-1zM30 22h2v1h-2zM0 23h1v1h-1zM2 23h1v1h-1zM8 23h5v1h-5zM21 23h2v1h-2zM25 23h2v1h-2zM30 23h3v1h-3zM0 24h1v1h-1zM4 24h1v1h-1zM6 24h1v1h-1zM9 24h4v1h-4zM15 24h1v1h-1zM17 24h1v1h-1zM22 24h1v1h-1zM24 24h5v1h-5zM32 24h1v1h-1zM8 25h2v1h-2zM11 25h1v1h-1zM13 25h2v1h-2zM16 25h2v1h-2zM19 25h1v1h-1zM23 25h2v1h-2zM28 25h1v1h-1zM30 25h3v1h-3zM0 26h7v1h-7zM10 26h7v1h-7zM20 26h5v1h-5zM26 26h1v1h-1zM28 26h1v1h-1zM30 26h2v1h-2zM0 27h1v1h-1zM6 27h1v1h-1zM8 27h1v1h-1zM10 27h1v1h-1zM14 27h3v1h-3zM18 27h1v1h-1zM20 27h5v1h-5zM28 27h3v1h-3zM32 27h1v1h-1zM0 28h1v1h-1zM2 28h3v1h-3zM6 28h1v1h-1zM8 28h1v1h-1zM14 28h1v1h-1zM16 28h2v1h-2zM19 28h1v1h-1zM22 28h1v1h-1zM24 28h6v1h-6zM31 28h1v1h-1zM0 29h1v1h-1zM2 29h3v1h-3zM6 29h1v1h-1zM8 29h1v1h-1zM11 29h3v1h-3zM16 29h1v1h-1zM18 29h3v1h-3zM23 29h3v1h-3zM28 29h2v1h-2zM31 29h2v1h-2zM0 30h1v1h-1zM2 30h3v1h-3zM6 30h1v1h-1zM8 30h2v1h-2zM13 30h6v1h-6zM20 30h1v1h-1zM22 30h1v1h-1zM26 30h2v1h-2zM29 30h1v1h-1zM0 31h1v1h-1zM6 31h1v1h-1zM10 31h1v1h-1zM12 31h1v1h-1zM15 31h1v1h-1zM18 31h1v1h-1zM20 31h3v1h-3zM25 31h2v1h-2zM28 31h3v1h-3zM0 32h7v1h-7zM8 32h1v1h-1zM13 32h1v1h-1zM15 32h1v1h-1zM17 32h3v1h-3zM22 32h4v1h-4zM27 32h1v1h-1zM29 32h1v1h-1zM31 32h1v1h-1z"/></svg></div>
+        <div class="qrurl">github.com/caspar-forefront/<br>tech-evo-ai-masterclass</div>
+      </a>
+    </div>
+  </section>
+
+</div></div>
+
+<div id="hint">← → navigate · B breakout · A assignment · F fullscreen</div>
+<div id="hud">
+  <span id="counter"></span>
+  <button id="prev" aria-label="Previous slide">‹</button>
+  <button id="next" aria-label="Next slide">›</button>
+</div>
+
+<script>
+(function () {
+  var slides = Array.prototype.slice.call(document.querySelectorAll(".slide"));
+  var cur = 0;
+  var cursor = 0; // current fragment step on the active slide
+
+  function frags(i) {
+    return Array.prototype.slice.call(slides[i].querySelectorAll(".frag"));
+  }
+  function maxF(i) {
+    return frags(i).reduce(function (m, f) { return Math.max(m, +f.dataset.f); }, 0);
+  }
+  function applyFrags(i, step) {
+    frags(i).forEach(function (f) { f.classList.toggle("on", +f.dataset.f <= step); });
+    slides[i].querySelectorAll(".ln[data-hl]").forEach(function (l) {
+      var steps = l.getAttribute("data-hl").split(" ");
+      l.classList.toggle("hlon", steps.indexOf(String(step)) !== -1);
+    });
+  }
+
+  // ?print lays out every slide as one page, each in its last fragment state.
+  if (/[?&]print\b/.test(location.search)) {
+    document.documentElement.classList.add("print");
+    slides.forEach(function (s, i) { applyFrags(i, maxF(i)); });
+    return;
+  }
+
+  function show(i, revealAll) {
+    slides[cur].classList.remove("active");
+    cur = Math.max(0, Math.min(slides.length - 1, i));
+    slides[cur].classList.add("active");
+    cursor = revealAll ? maxF(cur) : 0;
+    applyFrags(cur, cursor);
+    document.getElementById("counter").textContent = (cur + 1) + " / " + slides.length;
+    document.getElementById("progress").style.width = ((cur + 1) / slides.length * 100) + "%";
+    if (history.replaceState) history.replaceState(null, "", "#" + (cur + 1));
+  }
+
+  function next() {
+    if (cursor < maxF(cur)) { cursor++; applyFrags(cur, cursor); return; }
+    if (cur < slides.length - 1) show(cur + 1, false);
+  }
+  function prev() {
+    if (cursor > 0) { cursor--; applyFrags(cur, cursor); return; }
+    if (cur > 0) show(cur - 1, true);
+  }
+
+  // #12 opens slide 12. #breakout opens the slide with id="breakout".
+  function indexFromHash(hash) {
+    var key = (hash || "").slice(1);
+    var n = parseInt(key, 10);
+    if (!isNaN(n) && String(n) === key) return n - 1;
+    var i = slides.findIndex(function (s) { return s.id === key; });
+    return i < 0 ? 0 : i;
+  }
+
+  document.addEventListener("keydown", function (e) {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === "ArrowRight" || e.key === " " || e.key === "PageDown") { e.preventDefault(); next(); }
+    else if (e.key === "ArrowLeft" || e.key === "PageUp") { e.preventDefault(); prev(); }
+    else if (e.key === "b" || e.key === "B") show(indexFromHash("#breakout"), false);
+    else if (e.key === "a" || e.key === "A") show(indexFromHash("#assignment"), false);
+    else if (e.key === "Home") show(0, false);
+    else if (e.key === "End") show(slides.length - 1, false);
+    else if (e.key === "f" || e.key === "F") {
+      if (document.fullscreenElement) document.exitFullscreen();
+      else if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen();
+    }
+  });
+  document.getElementById("next").addEventListener("click", next);
+  document.getElementById("prev").addEventListener("click", prev);
+
+  function fit() {
+    var s = Math.min(window.innerWidth / 1280, window.innerHeight / 720);
+    document.getElementById("stage").style.transform = "scale(" + s + ")";
+  }
+  window.addEventListener("resize", fit);
+  fit();
+
+  window.addEventListener("hashchange", function () {
+    var i = indexFromHash(location.hash);
+    if (i !== cur) show(i, false);
+  });
+  show(indexFromHash(location.hash), false);
+})();
+</script>
+</body>
+</html>
