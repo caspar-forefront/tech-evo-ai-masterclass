@@ -17,3 +17,14 @@ node coding-harness/src/loop.ts
 ```
 
 To exit the agent, press Ctrl+D at the `>` prompt. The starter writes the conversation to standard error when it exits this way.
+
+### For Windows
+On Windows you can run it using Powershell. Ensure you have a valid Node version installed. Use `node -v` to check your version. It should be equal or higher than what is defined in [package.json](package.json).
+
+Then set your environment variable for the open router key with:
+`$env:OPENROUTER_API_KEY='<KEY>'`
+
+Then run the loop using:
+```ps1
+node .\coding-harness\src\loop.ts
+```
